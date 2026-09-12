@@ -42,6 +42,13 @@ Monitoring nutzen dasselbe Statusformat.
 Der [Frameworkvergleich und die API-Entscheidung in § 14.1](docs/proposals/2026-09-12-message-queue-api.md)
 begründen diesen Ansatz.
 
+Das zentrale Objekt ist `Phore\MessageQueue\PhoreMQ`:
+`$mq = new PhoreMQ($dsn, $options)` oder `new PhoreMQ($connector, $options)`.
+Die optionalen `ConnectionOptions` bündeln die gesamte weitere Konfiguration.
+Die `ConnectionFactory` liefert ebenfalls `PhoreMQ`, das
+`MessageQueueInterface` implementiert. Einmal je Verbindung erzeugen,
+wiederverwenden und mit `close()` freigeben; beide Wege verbinden sofort.
+
 ## Git Submodules
 
 Beim Klonen direkt mit auschecken:

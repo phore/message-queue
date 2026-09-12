@@ -6,18 +6,20 @@
 | 2026-09-12 | dermatthes | §§ 1, 3, 5, 8, 11–14: Kleine explizite API, RPC, Begleitmeldungen, Metadaten und Middleware nach Frameworkvergleich ergänzt |
 | 2026-09-12 | dermatthes | §§ 2, 12, 13.2, 15: Broadcast mit allen Lock-Antworten und Processing-Queue mit konkurrierenden Workern ergänzt |
 | 2026-09-12 | dermatthes | §§ 1.1, 16: Standardisierte Systemchecks, deklarierte Nachrichtenabhängigkeiten, Listenerdiagnose und Frontend-/Monitoring-Anbindung ergänzt |
+| 2026-09-12 | dermatthes | §§ 1, 1.1, 3, 4: PhoreMQ als zentrales Objekt mit DSN-/Connector-Konstruktor und gleichwertiger Factory-Erzeugung ergänzt |
 
 ## § 1 Abstract und Lieferumfang
 
 Eine frameworkunabhängige PHP-Library stellt eine gemeinsame Zugriffsschicht
 für Topics, dauerhafte Subscriptions und Worker bereit. Redis Streams ist der
-erste produktive Konnektor. URL-Factory und direkte Konnektor-Injektion sind
-gleichwertig. Message-Typen besitzen stabile fachliche Namen; ihre PHP-Klassen
+erste produktive Konnektor. Das zentrale Objekt `PhoreMQ` wird direkt mit
+DSN oder Konnektor und `ConnectionOptions` erzeugt; alternativ liefert die
+Connection-Factory dasselbe Objekt. Message-Typen besitzen stabile fachliche Namen; ihre PHP-Klassen
 dürfen sich zwischen Anwendungen unterscheiden. `phore/schema` validiert und
 hydriert optional die lokal erwartete Struktur. PHP-Attribute ergänzen die
 programmatische API. Signierung und Dateispeicher sind austauschbare Dienste.
 Eine optionale Request/Reply-Schicht ergänzt RPC mit Rückgabewerten und
-Begleitmeldungen; Metadaten und Middleware bleiben vom Payload getrennt.
+Begleitmeldungen; Metadaten und Middleware bleiben vom Payload getrennt. [geändert]
 
 **Dies ist ein Entwurf, keine implementierte oder installierbare API.** Das
 Ziel-Repository enthält bisher nur die Projektvorlage, keine `src/`- oder
@@ -41,11 +43,13 @@ nicht stillschweigend auf schwächere Semantik zurückfallen.
 
 ### § 1.1 Kleine API auf einen Blick
 
-Die Empfehlung ist eine einzige Queue-Fassade mit **fünf alltäglichen
-Operationen**. Event, Request und Antwort-Handler sind am Verb erkennbar;
-Broker, Routing, Schema und Middleware werden einmal konfiguriert.
+Die Empfehlung ist die konkrete Queue-Fassade `PhoreMQ`, die
+`MessageQueueInterface` implementiert, mit **fünf alltäglichen Operationen**.
+Event, Request und Antwort-Handler sind am Verb erkennbar; Broker, Routing,
+Schema und Middleware werden einmal am Objekt konfiguriert. [geändert]
 
 ```php
+$mq = new PhoreMQ($dsn, $options); // Einmal erzeugen; DSN oder Connector.
 $mq->publish('users', 'user.created.v1', ['userId' => 'u-1']);
 $mq->subscribe('users', 'billing-users', function (array $event): void { /* ... */ });
 
@@ -59,18 +63,18 @@ $mq->run();
 ```
 
 Diese Zeilen illustrieren getrennte Sender-/Empfängerprozesse, kein sequenziell
-ausführbares Skript; der Responder muss vor dem Request laufen. Factory und
-`close()` gehören zum Verbindungslebenszyklus. `emit($dto)` ist ausschließlich
+ausführbares Skript; der Responder muss vor dem Request laufen. Konstruktor
+bzw. Factory und `close()` gehören zum Verbindungslebenszyklus. `emit($dto)` ist ausschließlich
 der Komfortaufruf für `publish` mit Mapping; Attribute registrieren dieselben
 Handler. Es gibt keine zweite RPC-Client-Fassade, kein eigenes Promise-Framework,
 keinen Container-Zwang und kein mehrdeutiges `dispatch(..., true)`. Erweiterungen
 kommen über Optionsobjekte und zwei Middleware-Hooks; Signierung, Codec und
-Konnektoren sind Infrastruktur-Schnittstellen, keine Pflicht im täglichen Code.
+Konnektoren sind Infrastruktur-Schnittstellen, keine Pflicht im täglichen Code. [geändert]
 
 Für Diagnose gibt es zusätzlich genau einen Queue-Aufruf `check()`.
 Dienstentwickler melden Zustandsänderungen über `HealthState::set()` in einem
 gemeinsamen lokalen Zustandsobjekt; Transport, aktive Meldung und Ping-Antwort
-verwaltet die Library. Details und standardisierter Vertrag in § 16. [neu]
+verwaltet die Library. Details und standardisierter Vertrag in § 16.
 
 
 ## § 2 Begriffe und Zustellvertrag
@@ -115,7 +119,8 @@ lokale Bindung, löscht aber weder Subscription noch Rückstand.
 
 | Baustein | Verantwortung |
 |---|---|
-| `ConnectionFactory` / `ConnectionOptions` | DSN auswerten, installierten Adapter wählen, konfigurierte Dienste verbinden |
+| `ConnectionFactory` / `ConnectionOptions` | Alternative Erzeugung von `PhoreMQ` und gemeinsame Konfiguration; dieselbe DSN-Auflösung wie im Konstruktor [geändert] |
+| `PhoreMQ` | Zentrales Objekt; akzeptiert DSN oder Connector und Optionen, implementiert `MessageQueueInterface` und verwaltet den Lebenszyklus [neu] |
 | `MessageQueueInterface` | `publish`, `subscribe`, `request`, `respond`, `run`; Mapping-Komfort und Lebenszyklus gemäß § 1.1 |
 | `MessageRegistry` | Fachliche Namen, Sendeklassen, optionale Schemas und Default-Topics zuordnen |
 | `MessageCodecInterface` | JSON-kompatible Daten normalisieren, Envelope serialisieren und dekodieren |
@@ -152,21 +157,99 @@ Ein Provider kann auch verschlüsseln; HMAC allein tut dies nicht.
 ## § 4 Verbinden und DSN-Factory
 
 [Vollständige Beispiele: 01-connect.php](../../examples/api-draft/01-connect.php).
-Der vorgeschlagene Einstieg lautet:
+Der normale Einstieg erzeugt unmittelbar das zentrale Objekt; die Varianten
+sind Alternativen, nicht mehrere benötigte Verbindungen: [geändert]
 
 ```php
+use Phore\MessageQueue\PhoreMQ;
+
+$mq = new PhoreMQ('redis://localhost:6379/0', $options);
+// Oder einen bereits konfigurierten Connector injizieren:
+$mq = new PhoreMQ($connector, $options);
+// Auch mit benannten Argumenten:
+$mq = new PhoreMQ(connection: $dsn, options: $options);
+
+// Gleichwertige Alternative, etwa im DI-Bootstrap:
 $factory = new ConnectionFactory();
-$mq = $factory->connect('redis://localhost:6379/0', $options);
-$mq = $factory->fromConnector(new RedisStreamsConnector($redisConfig), $options);
-$mq = $factory->fromAttributes(LocalConnection::class, $options);
+$mq = $factory->connect($dsn, $options);                   // PhoreMQ
+$mq = $factory->fromConnector($connector, $options);       // PhoreMQ
+$mq = $factory->fromAttributes(LocalConnection::class, $options); // PhoreMQ
 ```
 
-Alle drei Methoden liefern `MessageQueueInterface`. `fromAttributes` liest
-genau eine lokal angegebene Klasse mit `#[QueueConnection(dsn: ...)]`; kein
-automatisches Scannen des Dateisystems. Die DSN-Auswertung verwendet eine
-Schema-Allowlist und erzeugt niemals beliebige PHP-Klassen aus URL-Inhalten.
-Provider können explizit über `registerConnectorFactory(scheme, factory)`
-registriert werden. Unbekannte Schemes/Optionen werden abgelehnt.
+Vorgeschlagene öffentliche Erzeugungssignaturen (Deklarationsauszug,
+keine Implementierung): [neu]
+
+```php
+// Phore\MessageQueue\PhoreMQ implements MessageQueueInterface
+public function __construct(
+    string|ConnectorInterface $connection,
+    ?ConnectionOptions $options = null,
+);
+
+// ConnectionFactory
+public function connect(string $dsn, ?ConnectionOptions $options = null): PhoreMQ;
+public function fromConnector(ConnectorInterface $connector, ?ConnectionOptions $options = null): PhoreMQ;
+public function fromAttributes(string $class, ?ConnectionOptions $options = null): PhoreMQ;
+```
+
+`ConnectorInterface` liegt unter `Phore\MessageQueue\ConnectorInterface`.
+Es gibt genau eine Verbindungsangabe: String bedeutet DSN, ein Objekt muss
+das Connector-Interface implementieren. Host, Port und Broker-Credentials
+kommen aus DSN oder Connector-Konfiguration; Schema, Security, Routing,
+Middleware, RPC, Health und Dateispeicher aus `ConnectionOptions`. Sämtliche
+Einstellungen werden damit beim Erzeugen übergeben. Es gibt keine parallelen
+DSN-/Connector-Felder im Optionsobjekt, keine später notwendigen Setter und
+kein zusätzliches `connect()` auf dem MQ-Objekt. [neu]
+
+`null` bedeutet ein frisches Optionsobjekt mit denselben dokumentierten
+Defaults für alle Erzeugungswege, kein implizites Lesen von Environment oder
+Secrets. Erforderliche Security-/Provider-Konfiguration muss weiterhin
+explizit vorliegen; fehlende Konfiguration wird nicht durch unsichere Defaults
+ersetzt. Konfiguration wird beim Erzeugen validiert und als Snapshot verwendet;
+spätere Mutation des Optionsobjekts ändert das laufende MQ nicht. Explizit
+zustandsbehaftete injizierte Dienste wie `HealthState` bleiben dagegen geteilt. [neu]
+
+Konstruktor und Factory bauen die Verbindung sofort mit begrenztem
+Verbindungstimeout auf. Erfolgreiche Rückkehr liefert ein verwendbares
+`PhoreMQ`; sie bestätigt noch keine fremden Listener oder nachrichtenspezifische
+Bereitschaft (dafür `check`). Beide Wege werfen dieselben Konfigurations-,
+DSN-, Verbindungs- und Auth-Exceptions aus § 11. Teilweise geöffnete eigene
+Ressourcen werden bei einem Fehler freigegeben. Kein verstecktes Lazy-Connect
+mit erst beim ersten Publish auftretendem initialem Verbindungsfehler. [neu]
+
+Eine interne gemeinsame Initialisierung löst DSNs auf, validiert Optionen
+und bindet Connector und Dienste genau einmal. Die Factory delegiert an
+diesen Erzeugungsweg; der Konstruktor ruft nicht rekursiv die öffentliche
+Factory auf. Direkte Connector-Injektion umgeht ausschließlich die DSN-
+Auflösung, niemals Security, Codec, Middleware oder Capability-Prüfungen.
+Die Factory gibt das `PhoreMQ` selbst zurück, keinen zusätzlichen Wrapper.
+Anwendungscode kann für austauschbare Abhängigkeiten weiterhin gegen
+`MessageQueueInterface` typisieren. [neu]
+
+Ein MQ-Objekt wird einmal je Verbindung und Prozess erzeugt und für alle
+zugehörigen Topics, Registrierungen, RPC und Checks wiederverwendet; kein
+globaler Singleton. `close()` ist idempotent und schließt die zugehörigen
+Transportressourcen, `stop()` beendet nur den Worker-Loop. Ein an `PhoreMQ`
+übergebener Connector steht exklusiv unter dessen Lebenszyklusverwaltung,
+auch beim gescheiterten Aufbau; er darf nicht gleichzeitig in ein zweites
+MQ-Objekt injiziert werden. Für geteilte In-Memory-Daten erhält jedes MQ einen
+eigenen Connector am selben `InMemoryBroker`. Separate RPC-/Health-Verbindungen
+bleiben bei den in §§ 13 und 16 beschriebenen Laufzeitanforderungen nötig. [neu]
+
+`fromAttributes` liest genau eine lokal angegebene Klasse mit
+`#[QueueConnection(dsn: ...)]`; kein automatisches Scannen des Dateisystems.
+Die gemeinsame DSN-Auswertung verwendet eine Schema-Allowlist und erzeugt
+niemals beliebige PHP-Klassen aus URL-Inhalten. Eigene Provider können lokal
+an der Factory über `registerConnectorFactory(scheme, factory)` registriert
+werden. Diese Registrierung verändert keine globale Registry: der einfache
+Konstruktor kennt nur die freigegebenen Standard-Schemes; für eigene Schemes
+nutzt man die konfigurierte Factory oder injiziert den Connector direkt.
+Unbekannte Schemes/Optionen werden in beiden Wegen abgelehnt. [geändert]
+
+Vorgesehene spätere Contract-Tests: gleicher konkreter Rückgabetyp und
+Funktionsumfang, gleiche Defaults/Exceptions/Sicherheitskette, einmaliger
+Verbindungsaufbau, Ressourcenfreigabe bei Teilfehlern, exklusives Connector-
+Ownership und idempotentes `close`. In diesem PR bleibt dies API-Entwurf. [neu]
 
 | Vorgeschlagene DSN | Bedeutung |
 |---|---|
@@ -174,7 +257,7 @@ registriert werden. Unbekannte Schemes/Optionen werden abgelehnt.
 | `rediss://user:password@host:6380/0` | Redis über TLS mit Zertifikatsprüfung |
 | `redis://:password@host:6379/0` | Redis-Passwort ohne ACL-Benutzer |
 | `redis+unix:///run/redis/redis.sock?db=0` | Redis-Server über Unix-Socket, weiterhin Redis-Protokoll |
-| `memory://` | Isolierter In-Memory-Broker je Factory-Verbindung |
+| `memory://` | Isolierter In-Memory-Broker je MQ-Erzeugung [geändert] |
 | `unix:///run/user/1000/phore-mq.sock` | Eigenes lokales MQ-Protokoll, benötigt separaten Dev-Broker |
 | `sqs://eu-central-1/123456789012` | Geplanter Queue-Adapter; logische Topics per Routingtabelle auf Queue-URLs abbilden |
 | `sns+sqs://eu-central-1/123456789012` | Geplanter Topic-Fan-out; SNS-ARNs und Subscription-Queues aus Routingtabelle |
@@ -192,7 +275,7 @@ Broker-Zugangsdaten und HMAC-Shared-Secret sind getrennte Einstellungen.
 
 Attribute enthalten höchstens lokale Beispiel-DSNs oder Verbindungsnamen,
 keine produktiven Secrets. Für produktive Deployment-Konfiguration ist die
-programmatische Factory vorzuziehen.
+programmatische Konstruktor-/Factory-Konfiguration vorzuziehen. [geändert]
 
 ## § 5 Senden, empfangen und Worker-Lebenszyklus
 
@@ -888,7 +971,7 @@ Nachricht benötigten Dienste bereit sind, und dieselbe verständliche Ursache
 erhalten. Ein bekanntes Berechtigungsproblem soll den betroffenen Handler
 deaktivieren können, während der Prozess seinen Zustand weiterhin meldet.
 Der Check ist eine zeitlich begrenzte Bereitschaftsaussage; er kann spätere
-Laufzeitfehler oder einen Ausfall unmittelbar nach der Prüfung nicht ausschließen. [neu]
+Laufzeitfehler oder einen Ausfall unmittelbar nach der Prüfung nicht ausschließen.
 
 ```php
 $connection = $mq->check(); // Verbindung + lokale Konfiguration, keine Consumer-Zusage.
@@ -912,7 +995,7 @@ Anforderungsliste bei `requireDeclared: true` ist ein Konfigurationsfehler.
 `requiredInstances`. Eine `ReadinessRequirement` in `ConnectionOptions::health`
 legt diese Anforderungen je Topic/Typ einmalig fest. Fehlt eine erwartete
 Topologie, meldet der gezielte Check `EXPECTED_CONSUMERS_UNDEFINED`/unknown;
-eine leere Antwortliste ist niemals automatisch ein gesunder Zustand. [neu]
+eine leere Antwortliste ist niemals automatisch ein gesunder Zustand.
 
 Der reine Verbindungscheck verwendet nur native, nicht verändernde
 Operationen. Ein gezielter Check erzeugt begrenzte Probe-/Reply-Nachrichten
@@ -920,25 +1003,25 @@ im reservierten Health-Kanal, aber keine fachlichen Jobs, Test-Logins,
 Dateiuploads oder Handler-Aufrufe. `autoCreate: false` bleibt wirksam: fehlende
 Health-Ressourcen werden gemeldet und nicht im Check heimlich angelegt.
 Ein fehlgeschlagener initialer `connect`-Aufruf bleibt eine Connection-/Auth-
-Exception; `check` untersucht eine bereits erzeugte Connection erneut. [neu]
+Exception; `check` untersucht eine bereits erzeugte Connection erneut.
 
 ### § 16.2 Was geprüft wird und welche Aussage daraus folgt
 
 | Prüfung | Positive Aussage | Grenzen / mögliche Probleme |
 |---|---|---|
-| Verbindung | Native Brokeranfrage mit den konfigurierten Zugangsdaten gelingt | Kein Nachweis für Publish-/Consume-Rechte auf allen Topics [neu] |
-| Lokale Konfiguration | Mapping, installierter Connector, Schema-Metadaten und Security-Konfiguration sind auflösbar | Keine Ausführung eines DTO-Konstruktors/Business-Handlers als Probe [neu] |
-| Ziel-Topologie | Topic/Subscription/Binding existieren, soweit der Adapter sie prüfen darf | Ohne Capability/Rechte unknown, niemals erfundener Erfolg [neu] |
-| Consumer-Bereitschaft | Aktuelle Antworten der erwarteten Gruppen/Instanzen, registrierter Handler für Typ, aktive Consume-Bindung und keine blockierende Störung | Consumer-Zähler oder veraltete Redis-Gruppen allein reichen nicht [neu] |
-| Anwendungsabhängigkeiten | Benannte Prüfungen melden z. B. Datenbank, Ausgabeverzeichnis oder Fremddienst bereit | Nur tatsächlich geprüfte Abhängigkeiten; Probe muss seiteneffektfrei sein [neu] |
-| Betriebsprobleme | Optionale, aktuelle Werte für Rückstau, älteste Nachricht, Pending/Retry/Dead Letter und letzte Fehler | Schwellen konfiguriert; nicht messbare Werte sind null/unknown [neu] |
+| Verbindung | Native Brokeranfrage mit den konfigurierten Zugangsdaten gelingt | Kein Nachweis für Publish-/Consume-Rechte auf allen Topics |
+| Lokale Konfiguration | Mapping, installierter Connector, Schema-Metadaten und Security-Konfiguration sind auflösbar | Keine Ausführung eines DTO-Konstruktors/Business-Handlers als Probe |
+| Ziel-Topologie | Topic/Subscription/Binding existieren, soweit der Adapter sie prüfen darf | Ohne Capability/Rechte unknown, niemals erfundener Erfolg |
+| Consumer-Bereitschaft | Aktuelle Antworten der erwarteten Gruppen/Instanzen, registrierter Handler für Typ, aktive Consume-Bindung und keine blockierende Störung | Consumer-Zähler oder veraltete Redis-Gruppen allein reichen nicht |
+| Anwendungsabhängigkeiten | Benannte Prüfungen melden z. B. Datenbank, Ausgabeverzeichnis oder Fremddienst bereit | Nur tatsächlich geprüfte Abhängigkeiten; Probe muss seiteneffektfrei sein |
+| Betriebsprobleme | Optionale, aktuelle Werte für Rückstau, älteste Nachricht, Pending/Retry/Dead Letter und letzte Fehler | Schwellen konfiguriert; nicht messbare Werte sind null/unknown |
 
 Ein erfolgreicher Health-Roundtrip beweist den Health-Pfad. Er beweist nicht
 automatisch den fachlichen Publish-Pfad, dessen Berechtigungen oder die
 Kompatibilität jeder späteren Payload. Der Bericht nennt deshalb jede
 Prüfung mit Quelle, Zeitpunkt und Grenzen. Schema-/Versionsinformationen
 werden als strukturelle Fähigkeit gemeldet; unterschiedliche lokale PHP-
-Klassennamen oder Schema-Fingerprints sind allein kein Inkompatibilitätsfehler. [neu]
+Klassennamen oder Schema-Fingerprints sind allein kein Inkompatibilitätsfehler.
 
 Für eine Processing-Gruppe reicht standardmäßig ein frischer bereiter Worker
 pro erwarteter Subscription. Für Broadcast müssen alle erwarteten
@@ -946,7 +1029,7 @@ Subscriptions bereit sein. Sind konkrete Instanzen zwingend, werden ihre
 IDs zusätzlich als fester Snapshot vorgegeben. Ein gesunder Ersatzworker
 genügt dann nicht anstelle einer ausdrücklich verlangten Instanz. Ein
 ausgefallener optionaler Worker bei erfüllter Mindestkapazität kann einen
-degraded-Bericht mit `ready=true` erzeugen. [neu]
+degraded-Bericht mit `ready=true` erzeugen.
 
 ### § 16.3 Gemeinsamer Dienstzustand: aktiv melden und auf Ping antworten
 
@@ -958,7 +1041,7 @@ Fehlerliste angehängt. `HealthFinding::healthy`, `degraded`, `unhealthy` und
 `unknown` erzeugen typisierte Befunde mit stabilem Code, sicherem
 `publicMessage` und einer konkreten Handlungsempfehlung `action`. Ohne
 Topic/Typ betrifft der Befund den ganzen Dienst, sonst nur passende Handler.
-Abhängigkeiten beginnen unknown, bis eine echte Prüfung vorliegt. [neu]
+Abhängigkeiten beginnen unknown, bis eine echte Prüfung vorliegt.
 
 `HealthOptions(state: $health, refresh: $probe, refreshIntervalSeconds: 5,
 statusTtlSeconds: 20)` bindet das lokale Zustandsobjekt ein. `refresh` ist
@@ -971,14 +1054,14 @@ Entwurfsdefaults, keine universellen Betriebsintervalle. Vor dem Binden an
 eine Connection aktualisiert `set` nur den lokalen Zustand; beim Start wird
 dieser veröffentlicht. Synchrones PHP kann einen hängenden Probe-Callback
 nicht präemptiv abbrechen: Abhängigkeitsclients müssen eigene kurze Timeouts
-einhalten. Harte Ausführungsgrenzen benötigen Prozessisolation. [neu]
+einhalten. Harte Ausführungsgrenzen benötigen Prozessisolation.
 
 Registrierte `subscribe`-/`respond`-Handler, tatsächliche Consume-Bindungen
 und deren Zustand werden von der Library ergänzt. Eine Anwendung darf mit
 `set(...healthy...)` eine fehlende Registrierung, Authentifizierung oder
 geschlossene Verbindung nicht überstimmen. Probe-Antworten und aktive
 `system.health.v1`-Events stammen aus derselben Snapshot-Erzeugung; ein
-Frontend muss keine unterschiedlichen Fehlerformate je Dienst verstehen. [neu]
+Frontend muss keine unterschiedlichen Fehlerformate je Dienst verstehen.
 
 Ein negativer Pflichtbefund pausiert nur die betroffene Verarbeitung. Der
 Worker bleibt im Health-/Recovery-Loop erreichbar, prüft mit Backoff erneut
@@ -986,13 +1069,13 @@ und nimmt Arbeit erst nach erfolgreicher Wiederherstellung an. Bei einem
 Berechtigungsfehler wird also nicht einfach der Container beendet. Tritt
 der Fehler nach der letzten Prüfung im Handler auf, setzt die Anwendung
 den gleichen Befund und wirft eine passende Retry-/Reject-Exception; die
-Library bestätigt die fehlgeschlagene Verarbeitung nicht als Erfolg. [neu]
+Library bestätigt die fehlgeschlagene Verarbeitung nicht als Erfolg.
 
 Die Runtime fragt für pausierte Ziele keine neuen Jobs ab. Bereits zugestellte
 Nachrichten werden nach der Lease-/Retry-Policy verzögert freigegeben oder
 begrenzt gehalten, nicht engmaschig konsumiert und erneut veröffentlicht.
 Health-Probes sind davon getrennt. Unterbrechungsschutz, sichere Fehlerablage
-und die bestehenden Retry-Grenzen bleiben wirksam. [neu]
+und die bestehenden Retry-Grenzen bleiben wirksam.
 
 ### § 16.4 Health-Kanal, Ausfälle und Authentifizierung
 
@@ -1003,7 +1086,7 @@ gibt es eine eigene Control-Subscription; Antworten werden je verifizierter
 Instanz und Probe-ID aggregiert, nicht wie normales RPC nach der ersten
 Antwort beendet. Pflichtinstanzen werden nicht aus Antwortzahlen erraten.
 Interne Health-Nachrichten durchlaufen Signierung und Größenlimits, aber
-keine fachlichen Handler oder rekursiv meldende Diagnose-Middleware. [neu]
+keine fachlichen Handler oder rekursiv meldende Diagnose-Middleware.
 
 Die Standardeinstellungen benutzen einen reservierten konfigurierbaren
 Namespace, etwa `_phore.health.probes`, `_phore.health.status` und
@@ -1011,7 +1094,7 @@ Namespace, etwa `_phore.health.probes`, `_phore.health.status` und
 berechtigte Namen, niemals DSNs aus einem Probe. Zugriffe, Service- und
 Instanzzuordnung müssen über verifizierte Identitäten/Keys beziehungsweise
 Broker-ACLs begrenzt sein. Ein gemeinsamer Entwicklungs-HMAC-Key ist keine
-verlässliche Identität einzelner Dienste oder Mandanten. [neu]
+verlässliche Identität einzelner Dienste oder Mandanten.
 
 Verliert ein Dienst die Berechtigung für seinen fachlichen Kanal, kann er
 über einen separat berechtigten Health-Kanal weiter antworten. Verliert er
@@ -1019,7 +1102,7 @@ auch diesen Zugang, kann er den Fehler **nicht über genau diese defekte
 Verbindung zuverlässig melden**. Der Monitor markiert nach TTL/Deadline
 den Zustand unknown/stale, mit letzter bekannter Ursache ausdrücklich als
 historischer Information. Eine aktuelle Ursache ist dann nicht automatisch
-bestimmbar; Timeout darf nicht als bewiesener Rechtefehler ausgegeben werden. [neu]
+bestimmbar; Timeout darf nicht als bewiesener Rechtefehler ausgegeben werden.
 
 Für unabhängig verfügbare Diagnose kann `HealthOptions::controlConnection`
 eine explizit injizierte separate Verbindung mit begrenzten Rechten verwenden.
@@ -1028,7 +1111,7 @@ Health-State auch dann bedienen, wenn der Aufbau der Business-Connection
 scheitert; die Anwendung trägt deren bekannte Fehlerursache in den geteilten
 State ein. Für Totalverlust der MQ-Infrastruktur kann derselbe Snapshot
 über einen externen HTTP-/Monitoring-Adapter exportiert werden. Weder
-HTTP-Server noch neue Zugangsdaten werden implizit erzeugt. [neu]
+HTTP-Server noch neue Zugangsdaten werden implizit erzeugt.
 
 Eine zusätzliche Socket-Verbindung bedeutet keine parallele PHP-Ausführung.
 Ein synchron blockierter Handler kann Probe-Antworten verzögern. Die
@@ -1037,7 +1120,7 @@ Antworten während beliebig langer blockierender Arbeit ist ein separat
 überwachter Prozess oder ein ausdrücklich unterstütztes asynchrones
 Laufzeitmodell erforderlich. Auch der Checker konsumiert ausschließlich
 seinen internen Rückkanal; reentrante `check`-/`run`-/`await`-Loops auf derselben
-Connection sind ungültig. [neu]
+Connection sind ungültig.
 
 ### § 16.5 Versioniertes Ergebnis und stabile Fehlercodes
 
@@ -1052,21 +1135,21 @@ Ein Check aller deklarierten Abhängigkeiten hat `scope=system` und zusätzlich
 `targets`: eine Liste vollständiger Zielberichte mit `topic` und `type`.
 Ein gezielter Bericht hat `scope=message` mit diesen beiden Zielfeldern.
 `ready` des Systemberichts setzt alle als erforderlich deklarierten Ziele
-voraus; eine frontendseitig optionale Funktion bleibt einzeln auswertbar. [neu]
+voraus; eine frontendseitig optionale Funktion bleibt einzeln auswertbar.
 
 | Status | Bedeutung | Einfluss auf `ready` |
 |---|---|---|
-| `healthy` | Alle angeforderten Pflichtprüfungen aktuell positiv, keine bekannten Zusatzprobleme | true für den ausgewiesenen Scope [neu] |
-| `degraded` | Pflichtanforderungen erfüllt, aber Warnung, optionale Messlücke oder reduzierte Redundanz | true, solange keine blockierende Schwelle überschritten ist [neu] |
-| `unhealthy` | Mindestens eine Pflichtanforderung nachweislich verletzt | false [neu] |
-| `unknown` | Mindestens eine Pflichtanforderung ungeprüft, nicht beantwortet oder veraltet | false [neu] |
+| `healthy` | Alle angeforderten Pflichtprüfungen aktuell positiv, keine bekannten Zusatzprobleme | true für den ausgewiesenen Scope |
+| `degraded` | Pflichtanforderungen erfüllt, aber Warnung, optionale Messlücke oder reduzierte Redundanz | true, solange keine blockierende Schwelle überschritten ist |
+| `unhealthy` | Mindestens eine Pflichtanforderung nachweislich verletzt | false |
+| `unknown` | Mindestens eine Pflichtanforderung ungeprüft, nicht beantwortet oder veraltet | false |
 
 Aggregationsreihenfolge: nachgewiesener Pflichtfehler vor Pflicht-Ungewissheit,
 danach degraded und healthy. Findings optionaler Prüfungen blockieren keine
 erfüllte Bereitschaft, bleiben aber als Problem sichtbar. Ein Brokerfehler
 blockiert den Gesamtscope, auch wenn ein alter Consumer-Bericht noch positiv
 ist. `check()` ohne Ziel darf `ready=true` nur für `scope=connection`
-ausweisen; Frontends dürfen daraus keine Freigabe einer Funktion ableiten. [neu]
+ausweisen; Frontends dürfen daraus keine Freigabe einer Funktion ableiten.
 
 Checks enthalten `name`, `status`, `required`, `source`, `observedAt` und
 `expiresAt`. Issues enthalten `code`, `severity`, `publicMessage`, `action`
@@ -1077,7 +1160,7 @@ anderem `BROKER_UNREACHABLE`, `AUTHENTICATION_FAILED`, `AUTHORIZATION_DENIED`,
 `HANDLER_NOT_REGISTERED`, `SCHEMA_UNAVAILABLE`, `DEPENDENCY_UNAVAILABLE`,
 `OUTPUT_PERMISSION_DENIED`, `CONSUMER_NOT_RESPONDING`, `STATUS_STALE`,
 `HEALTH_CHANNEL_UNAVAILABLE`, `INSUFFICIENT_READY_CONSUMERS`,
-`EXPECTED_CONSUMERS_UNDEFINED`, `METRIC_UNAVAILABLE` und `BACKLOG_HIGH`. [neu]
+`EXPECTED_CONSUMERS_UNDEFINED`, `METRIC_UNAVAILABLE` und `BACKLOG_HIGH`.
 
 Erwartete Betriebsprobleme werden im Report zurückgegeben, damit ein
 Monitoringaufruf nicht beim ersten unerreichbaren Dienst abbricht. Ungültige
@@ -1085,7 +1168,7 @@ Check-Konfiguration wirft `InvalidHealthCheckException`; sonst bleibt die
 Gesamtdeadline wirksam und unvollständige Teilprüfungen werden unknown.
 Exceptions/OS-Fehler im Dienst werden gezielt auf Codes abgebildet, nicht
 anhand beliebiger Fehlertexte erraten. Rohpfade, Zugangsdaten, Stacktraces
-und interne Details gehören nicht in `publicMessage`. [neu]
+und interne Details gehören nicht in `publicMessage`.
 
 ### § 16.6 Frontend, Login und Überwachung
 
@@ -1094,7 +1177,7 @@ Topic-/Typ-Ziele prüfen und dem Browser pro Funktion `ready`, `status`,
 `expiresAt` und freigegebene Fehlertexte liefern. Der Browser erhält keine
 Broker-Credentials. Eine ausgefallene optionale Funktion muss nicht die
 gesamte Anmeldung blockieren; die Anwendung legt fest, welche Funktionen
-zwingend benötigt werden. Beispiel 09 zeigt eine solche Backend-Antwort. [neu]
+zwingend benötigt werden. Beispiel 09 zeigt eine solche Backend-Antwort.
 
 Ein zentraler Monitor abonniert `system.health.v1`-Events, aktualisiert
 die Sicht und meldet Zustandswechsel frühzeitig. Push verkürzt die
@@ -1102,7 +1185,7 @@ Erkennungszeit; periodische aktive Checks und Ablaufzeiten decken verlorene
 Events oder verschwundene Dienste ab. Ein einmaliger Login-Check bleibt
 nicht für die ganze Sitzung gültig: nach Ablauf wird erneut geprüft oder
 eine frische, autorisierte Monitor-Sicht verwendet. Recovery-Meldungen
-heben einen Fehler erst nach erfolgreicher Prüfung auf. [neu]
+heben einen Fehler erst nach erfolgreicher Prüfung auf.
 
 Der Collector dedupliziert generation/sequence pro Instanz und akzeptiert
 keine Rückstufung auf eine ältere Sequenz. Eine neue Startgeneration wird
@@ -1110,12 +1193,12 @@ keine Rückstufung auf eine ältere Sequenz. Eine neue Startgeneration wird
 Registrierung bestätigt, nicht anhand beliebiger verspäteter Events. Fremde
 Probe-IDs, abgelaufene Berichte und ungültige Signaturen bleiben außerhalb
 der aktuellen Bereitschaft. Ein einfaches `subscribe` allein ist noch kein
-solcher vollständiger Collector; Beispiel 09 zeigt die Event-Anbindung. [neu]
+solcher vollständiger Collector; Beispiel 09 zeigt die Event-Anbindung.
 
 Die Benachrichtigungsintegration dedupliziert gleiche Ursachen und kann
 Hysterese/Backoff verwenden. Sie ist ein Adapter, keine eingebaute E-Mail-
 oder Browser-Push-Plattform. Runtime-Fehlerbehandlung, Exceptions und
-Idempotenz bleiben auch nach positivem Check erforderlich. [neu]
+Idempotenz bleiben auch nach positivem Check erforderlich.
 
 ### § 16.7 Beispiel, Ausbaustufe und spätere Prüfungen
 
@@ -1123,7 +1206,7 @@ Idempotenz bleiben auch nach positivem Check erforderlich. [neu]
 Worker mit standardisierter Schreibrechte-Prüfung, aktiver Statusmeldung
 und automatischem Pausieren/Wiederaufnehmen sowie gezielte Checks, eine
 Frontend-Antwort und ein Monitor-Abonnement. Es ist wie alle Beispiele
-ausschließlich API-Entwurf, keine bereitgestellte Health-Implementierung. [neu]
+ausschließlich API-Entwurf, keine bereitgestellte Health-Implementierung.
 
 Erster Health-Ausbau: lokaler State, Verbindungsprobe, signierte Bereitschafts-
 Probes, Instanz-/Gruppenaggregation, Push-/Recovery-Berichte und JSON-Vertrag.
@@ -1133,13 +1216,13 @@ Prozess, Status-Recovery, fehlende/falsche Instanz, Mindestkapazität versus
 alle Teilnehmer, falsche Signatur, TTL/Sequenzen/Startgeneration, verlorene
 Statusmeldung, blockierter Health-Kanal, hängender Probe-Callback und
 Deadline-Verbrauch über mehrere Ziele. Keine fachlichen Nachrichten oder
-automatischen Ressourcenänderungen durch einen Check. [neu]
+automatischen Ressourcenänderungen durch einen Check.
 
 Primärquellen: [Redis PING](https://redis.io/docs/latest/commands/ping/) für
 den eng begrenzten Verbindungsnachweis und [RabbitMQ Monitoring](https://www.rabbitmq.com/docs/monitoring)
 für die Unterscheidung von Broker-, Queue- und Anwendungszustand; abgerufen
 am 2026-09-12. Der einheitliche API-/Statusvertrag ist der hier vorgeschlagene
-Entwurf, kein behaupteter branchenweiter Standard. [neu]
+Entwurf, kein behaupteter branchenweiter Standard.
 
 
 ### § 16.8 Deklarierte Abhängigkeiten und Listenerdiagnose
@@ -1149,14 +1232,14 @@ sie benötigt. `ReadinessRequirement(topic, type, subscriptions,
 minReadyPerSubscription: 1)` beschreibt die erwarteten verarbeitenden Gruppen.
 Eine eigene `subscribe`-Registrierung erklärt dagegen, was diese Anwendung
 selbst empfängt; daraus wird keine Abhängigkeit von fremden Verarbeitern
-erraten. Beide Richtungen bleiben im Statusbericht sichtbar. [neu]
+erraten. Beide Richtungen bleiben im Statusbericht sichtbar.
 
 Jede Consumer-Zeile enthält `subscription`, `serviceId`, `instanceId`, `topic`,
 `type`, `status`, `ready`, `observedAt`, `expiresAt`, `issues` und optional
 `diagnostics`. Der Runtime-Registry-Eintrag stammt aus tatsächlich registrierten
 Handlern und der Consume-Bindung. Ein Listener kann also vorhanden, aber wegen
 eines Rechtefehlers nicht bereit sein. Meldungen können nicht garantieren,
-dass ein kurz danach abgestürzter Prozess noch vorhanden ist. [neu]
+dass ein kurz danach abgestürzter Prozess noch vorhanden ist.
 
 `presence` unterscheidet `present`, `absent`, `unknown`. `present` verlangt einen
 frischen verifizierten Instanznachweis. `absent`/`NO_LISTENER` ist nur zulässig,
@@ -1164,7 +1247,7 @@ wenn eine autoritative aktuelle Registry/Connector-Sicht die Abwesenheit für
 diesen Scope bestätigt. Ein fehlendes Probe-Reply bedeutet ansonsten
 `unknown` mit `CONSUMER_NOT_RESPONDING`; ein alter Eintrag `STATUS_STALE`.
 Auch die Aussage „kein Listener“ ist daher mit Quelle und Messzeit versehen.
-Die Library darf nicht aus einem leeren Antwortarray Abwesenheit beweisen. [neu]
+Die Library darf nicht aus einem leeren Antwortarray Abwesenheit beweisen.
 
 `HealthOptions::diagnostics` ist ein optionaler begrenzter Callback ohne
 Parameter, der Betriebsdaten als Array liefert. Standardfelder sind `host`
@@ -1175,17 +1258,17 @@ PHP-Allocator, nicht RSS oder den ganzen Container. Containerwerte benötigen
 einen eigenen passenden Adapter; Einheiten stehen im Feldnamen. Erweiterungen
 verwenden einen anwendungseigenen Namensraum. Größenlimits und eine Allowlist
 verhindern unbegrenzte Diagnose-Payloads. Ohne Provider fehlen die optionalen
-Daten; das allein blockiert keine Bereitschaft. [neu]
+Daten; das allein blockiert keine Bereitschaft.
 
 Hostnamen und detaillierte Betriebsdaten sind für berechtigte interne
 Überwachung opt-in, nicht automatisch Teil einer Browserantwort. Eine hohe
 Speicherzahl ist zunächst eine Messung. Erst eine explizite Schwellenprüfung
 setzt etwa einen degraded-Befund; eine überschrittene blockierende Grenze
 muss als Pflichtbefund definiert sein. Die Library erfindet keine universell
-passenden Speichergrenzen. [neu]
+passenden Speichergrenzen.
 
 Beispiel einer Consumer-Zeile im standardisierten Bericht (synthetische Werte;
-der vollständige Bericht hat zusätzlich die Felder aus § 16.5): [neu]
+der vollständige Bericht hat zusätzlich die Felder aus § 16.5):
 
 ```json
 {
@@ -1218,4 +1301,4 @@ der vollständige Bericht hat zusätzlich die Felder aus § 16.5): [neu]
 
 Zusätzliche spätere Contract-Tests: deklarierte Mehrzielprüfung unter einem
 Gesamtbudget, nachgewiesene Abwesenheit versus Timeout, vorhandener unbereiter
-Listener, Dateneinheiten/null, Diagnose-ACL und Browser-Allowlist. [neu]
+Listener, Dateneinheiten/null, Diagnose-ACL und Browser-Allowlist.
