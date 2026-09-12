@@ -8,6 +8,8 @@ aus dem Repository `phore/phore-schema`. Nachrichtentypen und Handler lassen
 sich programmatisch oder über PHP-Attribute zuordnen. Eine austauschbare
 Sicherheitsschicht signiert Nachrichten transparent mit HMAC-SHA-256;
 große Dateien werden über verifizierte Speicherreferenzen transportiert.
+Der Entwurf umfasst außerdem Request/Reply für RPC, getrennte Metadaten
+und zwei optionale Middleware-Hooks für Senden und Handler-Ausführung.
 
 **Status: API-Entwurf, noch keine Queue-Implementierung.** Composer-Metadaten
 und Autoloading stammen weiterhin aus der Projektvorlage. Die folgenden
@@ -18,6 +20,15 @@ PHP-Dateien zeigen die vorgeschlagene API und sind noch nicht ausführbar.
 - [Programmatisch senden und empfangen](examples/api-draft/02-programmatic.php)
 - [SDK-Typen und Handler mit Attributen](examples/api-draft/03-attributes.php)
 - [ZIP-Dateien und lokale Entwicklung](examples/api-draft/04-files-and-local.php)
+- [RPC: Command, Ergebnis, Warnings und Fehler](examples/api-draft/05-rpc.php)
+- [Metadaten und Diagnose-Middleware](examples/api-draft/06-metadata-middleware.php)
+
+Die Alltags-API bleibt klein: `publish()` sendet ein Event, `subscribe()`
+empfängt Events, `request()->await()` erwartet eine Antwort, `respond()`
+registriert einen Command-Handler und `run()` verarbeitet Nachrichten.
+`emit($dto)` ist die kurze Variante für bereits zugeordnete SDK-Typen.
+Der [Frameworkvergleich und die API-Entscheidung in § 14.1](docs/proposals/2026-09-12-message-queue-api.md)
+begründen diesen Ansatz.
 
 ## Git Submodules
 
@@ -33,4 +44,3 @@ Nachträglich initialisieren oder aktualisieren:
 git submodule update --init --recursive
 git submodule update --remote --merge
 ```
-
