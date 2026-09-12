@@ -4,6 +4,7 @@
 |---|---|---|
 | 2026-09-12 | dermatthes | §§ 1–12: Proposal mit API-Beispielen, Konnektorvergleich und Paketgrenzen angelegt |
 | 2026-09-12 | dermatthes | §§ 1, 3, 5, 8, 11–14: Kleine explizite API, RPC, Begleitmeldungen, Metadaten und Middleware nach Frameworkvergleich ergänzt |
+| 2026-09-12 | dermatthes | §§ 2, 12, 13.2, 15: Broadcast mit allen Lock-Antworten und Processing-Queue mit konkurrierenden Workern ergänzt |
 
 ## § 1 Abstract und Lieferumfang
 
@@ -15,7 +16,7 @@ dürfen sich zwischen Anwendungen unterscheiden. `phore/schema` validiert und
 hydriert optional die lokal erwartete Struktur. PHP-Attribute ergänzen die
 programmatische API. Signierung und Dateispeicher sind austauschbare Dienste.
 Eine optionale Request/Reply-Schicht ergänzt RPC mit Rückgabewerten und
-Begleitmeldungen; Metadaten und Middleware bleiben vom Payload getrennt. [geändert]
+Begleitmeldungen; Metadaten und Middleware bleiben vom Payload getrennt.
 
 **Dies ist ein Entwurf, keine implementierte oder installierbare API.** Das
 Ziel-Repository enthält bisher nur die Projektvorlage, keine `src/`- oder
@@ -27,7 +28,7 @@ unverändert. Beispiele verwenden PHP >=8.3, passend zur aktuellen Vorlage.
 |---|---|
 | Erste Umsetzung | Factory, Registry, JSON-Envelope, Topic/Subscription-API, Redis Streams, In-Memory, Callback-Worker, Ack/Retry/Dead Letter, Exceptions, HMAC, optionale Schema-Bridge und Attribute |
 | Anschlussphase | Attachment-/PayloadStore-Vertrag mit lokalem Dateispeicher; separater Unix-Entwicklungsbroker mit Konnektor |
-| Optionale RPC-Erweiterung | `request`/`respond`, Rückkanal, Ergebnis/Fehler/Warnings und Middleware aus §§ 13–14; baut auf der Queue-API auf [neu] |
+| Optionale RPC-Erweiterung | `request`/`respond`, Rückkanal, Ergebnis/Fehler/Warnings und Middleware aus §§ 13–14; baut auf der Queue-API auf |
 | Weitere Adapter | SQS für Arbeitsqueues, SNS+SQS für Fan-out, Azure Service Bus, RabbitMQ |
 | Spätere Erweiterungen | PGP-Provider, S3/Blob-PayloadStore, Batch, Delay, Filter, Replay, Telemetrie, optionale Outbox-/Inbox-Integration |
 
@@ -41,7 +42,7 @@ nicht stillschweigend auf schwächere Semantik zurückfallen.
 
 Die Empfehlung ist eine einzige Queue-Fassade mit **fünf alltäglichen
 Operationen**. Event, Request und Antwort-Handler sind am Verb erkennbar;
-Broker, Routing, Schema und Middleware werden einmal konfiguriert. [neu]
+Broker, Routing, Schema und Middleware werden einmal konfiguriert.
 
 ```php
 $mq->publish('users', 'user.created.v1', ['userId' => 'u-1']);
@@ -63,7 +64,7 @@ der Komfortaufruf für `publish` mit Mapping; Attribute registrieren dieselben
 Handler. Es gibt keine zweite RPC-Client-Fassade, kein eigenes Promise-Framework,
 keinen Container-Zwang und kein mehrdeutiges `dispatch(..., true)`. Erweiterungen
 kommen über Optionsobjekte und zwei Middleware-Hooks; Signierung, Codec und
-Konnektoren sind Infrastruktur-Schnittstellen, keine Pflicht im täglichen Code. [neu]
+Konnektoren sind Infrastruktur-Schnittstellen, keine Pflicht im täglichen Code.
 
 ## § 2 Begriffe und Zustellvertrag
 
@@ -82,7 +83,10 @@ erhalten beide `user.created.v1`; drei Billing-Worker teilen sich die
 Billing-Zustellungen. Innerhalb eines Workers erhält ein Nachrichtenvertrag
 genau einen registrierten Handler je Subscription; doppelte Registrierung
 ist ein Konfigurationsfehler. Weitere unabhängige Handler verwenden eigene
-Subscriptions. Ein Worker kann mehrere Topics abonnieren.
+Subscriptions. Ein Worker kann mehrere Topics abonnieren. „An alle“ bezeichnet
+alle passenden benannten Subscriptions; „an einen“ einen ausgewählten Worker
+innerhalb derselben Subscription. Die Subscription-Topologie bestimmt das
+Verhalten, kein zusätzlicher Broadcast-Schalter beim Senden. Beispiele in § 15. [geändert]
 
 Der Grundvertrag lautet **at least once innerhalb der konfigurierten
 Aufbewahrung und Verfügbarkeit**. Doppelte Zustellungen sind möglich, ebenso
@@ -105,7 +109,7 @@ lokale Bindung, löscht aber weder Subscription noch Rückstand.
 | Baustein | Verantwortung |
 |---|---|
 | `ConnectionFactory` / `ConnectionOptions` | DSN auswerten, installierten Adapter wählen, konfigurierte Dienste verbinden |
-| `MessageQueueInterface` | `publish`, `subscribe`, `request`, `respond`, `run`; Mapping-Komfort und Lebenszyklus gemäß § 1.1 [geändert] |
+| `MessageQueueInterface` | `publish`, `subscribe`, `request`, `respond`, `run`; Mapping-Komfort und Lebenszyklus gemäß § 1.1 |
 | `MessageRegistry` | Fachliche Namen, Sendeklassen, optionale Schemas und Default-Topics zuordnen |
 | `MessageCodecInterface` | JSON-kompatible Daten normalisieren, Envelope serialisieren und dekodieren |
 | `SchemaMapperInterface` | Optional Strukturen prüfen und in lokal konfigurierte DTOs hydrieren |
@@ -121,7 +125,7 @@ Zeit-/Zielbindung prüfen → Envelope dekodieren → optional Dateien verifizie
 → lokale Struktur prüfen/hydrieren → Handler-Middleware und Handler ausführen
 → bei RPC finale Antwort bestätigen lassen → Ack. Dateiinhalte werden erst
 bei Zugriff geladen, bleiben aber vor Nutzung zu prüfen. Middleware darf weder
-die Signaturprüfung noch Settlement umgehen; Details in § 14.3. [geändert]
+die Signaturprüfung noch Settlement umgehen; Details in § 14.3.
 
 Der Konnektor kennt keine Anwendungs-DTOnamen oder Callbacks. Seine
 vorgeschlagenen primitiven Operationen sind `capabilities(): CapabilitySet`,
@@ -212,7 +216,7 @@ abgelehnt. `PublishOptions` kann eine stabile `messageId`, `expiresAt`,
 `correlationId`, getrennte `metadata` und Attachments tragen. Ein Retry eines
 unklar bestätigten Publishes verwendet dieselbe ID und denselben fachlichen
 Inhalt. `request`/`respond` sind die optionale RPC-Erweiterung aus § 13;
-`subscribe` sendet niemals automatisch einen Rückgabewert. [geändert]
+`subscribe` sendet niemals automatisch einen Rückgabewert.
 
 `SubscriptionOptions` enthält optional `type` als exakten Filter,
 `payloadClass` als lokale Zielklasse, `startAt`, `ackMode`, `retryPolicy` und
@@ -383,7 +387,7 @@ ProtectedFrame transportiert die **exakten ursprünglichen Envelope-Bytes**
 und die Signatur; eine längenpräfixierte Signiereingabe mit Domain-Separator
 verhindert mehrdeutige Konkatenation. Empfänger serialisieren zur Prüfung
 nicht neu. Das Frame-Format muss vor Implementierung mit gemeinsamen
-Testvektoren fixiert werden. [geändert]
+Testvektoren fixiert werden.
 
 Vor Hydration, Callback oder externem Dateiabruf wird mit lokal erlaubtem
 Algorithmus/Key geprüft, konstantzeitlich verglichen und das Topic/Audience
@@ -511,7 +515,7 @@ RPC ergänzt `RequestTimeoutException`, `RemoteCommandException`,
 Responder geworfene `CommandFailedException` beschreibt einen ausdrücklich
 freigegebenen fachlichen Fehler; über den Rückkanal geht nur dessen sicheres
 Fehlerobjekt. Ein Fehlerlevel in einer Begleitmeldung ist kein terminaler
-Command-Fehler und ändert die Settlement-Entscheidung nicht. [neu]
+Command-Fehler und ändert die Settlement-Entscheidung nicht.
 
 ## § 12 Paketgrenzen, spätere Prüfungen und Quellen
 
@@ -528,7 +532,12 @@ Admin-UIs, Virenscanner, ZIP-Entpackung, PGP-Keyverwaltung oder eine eigene
 verteilte Dateispeicherplattform. Erweiterungspunkte dürfen diese verbinden,
 ohne den Grundvertrag damit zu belasten. Keine scheinbar universellen
 Transaktionen, Prioritäten oder Exactly-once-Zusagen. Der nun beauftragte
-RPC-Umfang bleibt eine optionale Request/Reply-Erweiterung gemäß § 13. [geändert]
+RPC-Umfang bleibt eine optionale Request/Reply-Erweiterung gemäß § 13.
+
+Globale Lock-/Konsensverfahren gehören nicht in die MQ-Library. § 15 zeigt
+Broadcast und das Einsammeln von Lock-Bestätigungen; die tatsächlichen
+lokalen Leases und gegebenenfalls ein autoritatives Fencing-Verfahren
+verantwortet ein separater Lock-Dienst der Anwendung. [neu]
 
 Für die spätere Umsetzung sind fokussierte Contract-Tests vorgesehen:
 unabhängige Subscriptions versus Worker-Gruppe, Redelivery nach Crash,
@@ -555,7 +564,7 @@ programmatischen Responder, alternativ denselben Handler per `#[Respond]`,
 Parameterübergabe, Ergebnis, Warning und Fehlerbehandlung in getrennten
 Prozessen. `request` veröffentlicht sofort und gibt `PendingReply` zurück;
 erst `await()` blockiert. Der Responder liefert mit `return` ein Array oder
-DTO. Ein skalarer Wert wird explizit als `['value' => ...]` verpackt. [neu]
+DTO. Ein skalarer Wert wird explizit als `['value' => ...]` verpackt.
 
 ### § 13.1 Einmalige Konfiguration und Aufruf
 
@@ -566,7 +575,7 @@ Im lokalen Beispiel dürfen beide auf derselben HMAC-Audience arbeiten.
 Anwendungen verwenden eigene Reply-Topics je Instanz, oder einen expliziten
 zentralen Demultiplexer; konkurrierende Client-Prozesse dürfen nicht denselben
 Reply-Consumer teilen und fremde Antworten wegkonsumieren. Die Rückkanal-
-Subscription wird vor Veröffentlichung des ersten Requests bestätigt. [neu]
+Subscription wird vor Veröffentlichung des ersten Requests bestätigt.
 
 `RequestOptions` ergänzt `timeoutSeconds` (Default 30 Sekunden ab `request`,
 nicht ab `await`), `metadata`, optional `responseClass` und `onNotice`.
@@ -575,37 +584,42 @@ Connection, keine beliebigen Business-Handler. Mehrere Pending-Requests
 teilen einen Dispatcher, der nach Request-ID puffert; Anzahl und Speicher
 sind begrenzt. Gleichzeitige/nestende `run`-/`await`-Loops auf derselben
 Connection sind ungültig. Für RPC aus einem Handler eine separate Connection
-und einen unabhängig laufenden Responder verwenden. [neu]
+und einen unabhängig laufenden Responder verwenden.
 
 `Reply` besitzt schreibgeschützte `payload`, `metadata` und `notices`.
 `responseClass` hydriert `payload` strukturell nach § 6, ohne die PHP-Klasse
 des Responders zu vergleichen. Ohne diese Option kommt ein Array zurück.
 Metadaten und Begleitmeldungen werden nicht in das Ergebnis-DTO hineingemischt.
 Ohne konfigurierte RPC-Schicht sind `request` und `respond` frühe
-`RpcNotConfiguredException`s statt stiller Fire-and-forget-Aufrufe. [neu]
+`RpcNotConfiguredException`s statt stiller Fire-and-forget-Aufrufe.
 
 ### § 13.2 Nachrichtenvertrag und Zustellverhalten
 
 | Nachrichtenart | Body | Geschützte Metadaten |
 |---|---|---|
-| Request | Command-Parameter | `requestId` (= Request-`messageId`), `replyTo`, Deadline, `kind=request`, optionale fachliche `correlationId` [neu] |
-| Result (`rpc.result.v1`) | Rückgabedaten | Ursprüngliche `requestId`, `kind=result`, eigene `messageId`, Antwortmetadaten und gesammelte Notices [neu] |
-| Error (`rpc.error.v1`) | Sicheres Fehlerobjekt mit `code`, `message`, begrenzten `details` | `requestId`, `kind=error`, eigene `messageId`, gesammelte Notices [neu] |
-| Notice (`rpc.notice.v1`) | `level`, `code`, `message`, begrenzte `details` | `requestId`, `noticeId`, eigene `messageId`, `kind=notice` [neu] |
+| Request | Command-Parameter | `requestId` (= Request-`messageId`), `replyTo`, Deadline, `kind=request`, optionale fachliche `correlationId` |
+| Result (`rpc.result.v1`) | Rückgabedaten | Ursprüngliche `requestId`, `kind=result`, eigene `messageId`, Antwortmetadaten und gesammelte Notices |
+| Error (`rpc.error.v1`) | Sicheres Fehlerobjekt mit `code`, `message`, begrenzten `details` | `requestId`, `kind=error`, eigene `messageId`, gesammelte Notices |
+| Notice (`rpc.notice.v1`) | `level`, `code`, `message`, begrenzte `details` | `requestId`, `noticeId`, eigene `messageId`, `kind=notice` |
 
 Command-Typ und Subscription bestimmen eine logische Responder-Gruppe,
 deren Worker die Arbeit teilen. Fan-out an mehrere unabhängig ausführende
 Services ist für ein RPC-Command nicht der Standard und wird durch bewusst
 provisionierte Topologie verhindert. Ein unbekanntes Command bleibt ein
 Mappingfehler; es löst niemals Reflection-Aufrufe auf vom Sender benannten
-PHP-Methoden, Shell-Kommandos oder Klassen aus. [neu]
+PHP-Methoden, Shell-Kommandos oder Klassen aus.
 
 Das erste passende verifizierte Result/Error beendet den Pending-Request.
 Duplikate werden anhand Request-/Reply-ID behandelt; fremde oder verspätete
 Antworten werden im eigenen Rückkanal nach konfigurierter Ablage-/Discard-
 Policy bestätigt. Notices beenden den Request nicht. Der Client prüft
 Signatur, Audience, Reply-Topic, Request-ID, erwarteten Antworttyp und Schema;
-eine Korrelations-ID allein ist keine Authentifizierung. [neu]
+eine Korrelations-ID allein ist keine Authentifizierung.
+
+`request()->await()` wartet absichtlich nur auf eine terminale Antwort.
+Wer Antworten aller Teilnehmer braucht, verwendet `publish` plus eine
+aggregierende Subscription wie in § 15.2; hierfür wird keine mehrdeutige
+`request(all: true)`-Option oder zusätzliche Queue-Methode eingeführt. [neu]
 
 Auf dem Server folgen Antwort-Publish und dessen Bestätigung **vor** dem Ack
 des Requests. Bei unklarer Antwortannahme bleibt der Request wiederholbar.
@@ -614,7 +628,7 @@ mehrfache Ausführung/Replies erzeugen. Für verändernde Commands sind eine
 idempotente Operation sowie ein persistenter Request-/Ergebnisspeicher mit
 atomarer Anwendungsanbindung nötig: bekannte fertige Requests senden das
 gespeicherte Ergebnis erneut, ohne die Aktion zu wiederholen. Dies ist keine
-Exactly-once-Garantie der Queue und kein still aktivierter globaler Cache. [neu]
+Exactly-once-Garantie der Queue und kein still aktivierter globaler Cache.
 
 Ein Timeout begrenzt nur das lokale Warten: Der Server kann noch arbeiten
 oder bereits fertig sein. Vor Handlerstart wird die geschützte Deadline
@@ -622,7 +636,7 @@ geprüft; während der Ausführung ist Abbruch kooperativ und keine Zusage.
 Timeout führt nicht automatisch zu erneutem Senden. Offene Handles werden
 bei `close` beendet; Reply-Retention und Bereinigung sind konfiguriert.
 Abgelaufene Requests/Replies können in die lokale Fehlerablage gehen, ohne
-noch einen rechtzeitig ankommenden Remote-Fehler versprechen zu können. [neu]
+noch einen rechtzeitig ankommenden Remote-Fehler versprechen zu können.
 
 ### § 13.3 Warnings, Fehler und Rückgabe-Metadaten
 
@@ -632,7 +646,7 @@ von `MessageContext`. Er stellt genau zwei zusätzliche Operationen bereit:
 `Notice(level: 'warning', code: ..., message: ..., details: ...)` sendet eine
 Begleitmeldung, ohne Parameter oder Ergebnisstruktur zu ändern. `info` und
 `error` sind ebenfalls zulässig; `error` als Notice kann etwa einen behobenen
-Teilfehler melden und ist ausdrücklich nicht gleichbedeutend mit Abbruch. [neu]
+Teilfehler melden und ist ausdrücklich nicht gleichbedeutend mit Abbruch.
 
 `notify` sammelt eine begrenzte Notice-Liste und versucht die sofortige
 Veröffentlichung am Rückkanal. Ein temporärer Notice-Publish-Fehler wird lokal
@@ -641,7 +655,7 @@ abschließende Result-/Error-Nachricht enthält die gesammelten Notices erneut,
 damit verlorene oder überholte Zwischenmeldungen sichtbar bleiben. Beim
 Erreichen des Limits folgt ein expliziter Truncation-Hinweis. Der Client
 dedupliziert `onNotice` anhand `noticeId`; `Reply::notices` ist die finale
-Zusammenfassung, keine zusätzlich ungefiltert auszugebende Ereignisliste. [neu]
+Zusammenfassung, keine zusätzlich ungefiltert auszugebende Ereignisliste.
 
 `CommandFailedException` erzeugt eine terminale Fehlerantwort mit freigegebenem
 Code und Text; `await` wirft daraus lokal `RemoteCommandException` mit
@@ -651,25 +665,25 @@ Infrastrukturfehler folgen zunächst der begrenzten Retry-Policy; endgültige
 unbekannte Fehler werden als neutraler `INTERNAL_ERROR` gemeldet und intern
 abgelegt. Ein fehlerhafter `onNotice`-Callback darf den bereits laufenden
 Command nicht erneut senden; er wird lokal gemeldet, der Dispatcher setzt
-Empfang und Deadline-Verarbeitung fort. [neu]
+Empfang und Deadline-Verarbeitung fort.
 
 ## § 14 Metadaten, Middleware und API-Entscheidung
 
 [Beispiel 06](../../examples/api-draft/06-metadata-middleware.php) zeigt
 Trace-/Locale-Metadaten, eine Send-Middleware, eine Handler-Middleware und
 das eigenständige Publizieren von Warnungen/Fehlern auf ein Diagnose-Topic.
-Das ist sowohl mit normalen Events als auch mit RPC nutzbar. [neu]
+Das ist sowohl mit normalen Events als auch mit RPC nutzbar.
 
 ### § 14.1 Frameworkvergleich und API-Entscheidung
 
 | Framework / Library | Recherchierter Ansatz | Entscheidung für diese API |
 |---|---|---|
-| Symfony Messenger | `dispatch`, Handler, Envelope/Stamps, Middleware; `HandledStamp` liefert Ergebnisse ausgeführter Handler, kein automatischer Remote-Rückkanal | Metadaten und Hooks übernehmen; Remote-Warten ausdrücklich `request()->await()` nennen [neu] |
-| PHP Enqueue | `sendCommand` mit Reply-Option, Promise/`receive`, `Result::reply` und `ReplyExtension` | Request/Reply übernehmen; keine boolesche Option, die die Bedeutung eines normalen Sends verändert [neu] |
-| RabbitMQ PHP-Tutorial | Callback-Queue, `reply_to`, `correlation_id`, Duplikatbehandlung | Rückkanal und IDs intern verwalten, nicht in jedem Handler manuell publizieren [neu] |
-| NATS .NET Client | Explizites `RequestAsync`, Reply-Subject und Responder-Antwort | Verständliche Verben übernehmen; NATS-spezifische Inbox-Haltbarkeit nicht auf alle Broker übertragen [neu] |
-| MassTransit | Typisierte Requests/Responses, Response-Address, Fault-Nachrichten und Timeouts | Sichere terminale Fehlerantwort und lokale Exception; zusätzliche Client-/Bus-Fabriken im Alltagsaufruf vermeiden [neu] |
-| Laravel Queues | Job-Middleware um Handler-Ausführung mit Fortsetzungs-Callback | Kleinen Callable-Hook übernehmen, ohne Laravel-Job-Basisklasse und Container [neu] |
+| Symfony Messenger | `dispatch`, Handler, Envelope/Stamps, Middleware; `HandledStamp` liefert Ergebnisse ausgeführter Handler, kein automatischer Remote-Rückkanal | Metadaten und Hooks übernehmen; Remote-Warten ausdrücklich `request()->await()` nennen |
+| PHP Enqueue | `sendCommand` mit Reply-Option, Promise/`receive`, `Result::reply` und `ReplyExtension` | Request/Reply übernehmen; keine boolesche Option, die die Bedeutung eines normalen Sends verändert |
+| RabbitMQ PHP-Tutorial | Callback-Queue, `reply_to`, `correlation_id`, Duplikatbehandlung | Rückkanal und IDs intern verwalten, nicht in jedem Handler manuell publizieren |
+| NATS .NET Client | Explizites `RequestAsync`, Reply-Subject und Responder-Antwort | Verständliche Verben übernehmen; NATS-spezifische Inbox-Haltbarkeit nicht auf alle Broker übertragen |
+| MassTransit | Typisierte Requests/Responses, Response-Address, Fault-Nachrichten und Timeouts | Sichere terminale Fehlerantwort und lokale Exception; zusätzliche Client-/Bus-Fabriken im Alltagsaufruf vermeiden |
+| Laravel Queues | Job-Middleware um Handler-Ausführung mit Fortsetzungs-Callback | Kleinen Callable-Hook übernehmen, ohne Laravel-Job-Basisklasse und Container |
 
 **Empfehlung für dieses Paket:** explizite Verben auf einer Queue-Instanz,
 kleine Callbacks und optionale DTOs. Der alltägliche RPC-Aufruf benötigt nur
@@ -678,7 +692,7 @@ Setup verwaltet Rückkanal und Policies. Zwei klare Methoden sind hier
 verständlicher als ein `send` mit Mode-Flags oder ein generisches
 Middleware-/Stamp-System für jeden einzelnen Aufruf. Das ist eine
 Designabwägung für die beschriebenen Anforderungen, kein objektiver
-Leistungsvergleich der Frameworks. [neu]
+Leistungsvergleich der Frameworks.
 
 ### § 14.2 Metadaten außerhalb des fachlichen Payloads
 
@@ -688,7 +702,7 @@ die schreibgeschützte Empfangssicht. Schlüssel unter `app.*` sind für die
 Anwendung vorgesehen, etwa `app.traceId`, `app.locale`, `app.tenantId` oder
 `app.source`. Systemfelder wie `requestId`, `replyTo`, Typ, Audience,
 Deadline und Signatur dürfen darüber nicht überschrieben werden. Grenzen
-für Schlüsselzahl, Tiefe und Bytes werden vor Versand geprüft. [neu]
+für Schlüsselzahl, Tiefe und Bytes werden vor Versand geprüft.
 
 Metadaten werden mit signiert; ihre Integrität ist damit geschützt, sie sind aber nicht automatisch
 autorisiert. Tenant-/Benutzerangaben müssen gegen die authentifizierte
@@ -697,7 +711,7 @@ Tokens oder sämtlichen eingehenden Metadaten. Antwortmetadaten werden
 ausdrücklich gesetzt, etwa `app.worker` oder `app.durationMs`. Allgemeine
 Warnings/Errors sind normale `diagnostic.v1`-Events mit Level, Code und
 sicherem Text; ihre `correlationId` verbindet sie mit dem betreffenden Request.
-Es gibt dafür keine zusätzliche Spezialmethode auf der Queue-Fassade. [neu]
+Es gibt dafür keine zusätzliche Spezialmethode auf der Queue-Fassade.
 
 ### § 14.3 Genau zwei optionale Middleware-Hooks
 
@@ -707,7 +721,7 @@ Locator. Die Verträge lauten `send(OutgoingMessage $message, callable $next):
 PublishReceipt` und `handle(mixed $payload, MessageContext $context,
 callable $next): mixed`. Das sind Callable-Signaturen, keine zusätzlich
 aufzurufenden Queue-Methoden. `$next` wird im Normalfall genau einmal aufgerufen;
-Exceptions propagieren. Rückgabewerte dürfen nicht verloren gehen. [neu]
+Exceptions propagieren. Rückgabewerte dürfen nicht verloren gehen.
 
 Send-Hooks laufen vor finaler Schema-/Envelope-Prüfung und Signierung;
 `withMetadata` erzeugt eine neue lokale Nachricht mit zusammengeführten
@@ -716,7 +730,7 @@ Bytes, ohne neue Trace-IDs oder Zeitstempel einzumischen. Handler-Hooks laufen
 nach Signaturprüfung und Hydration, aber vor Result-/Error-Erzeugung und Ack;
 sie ändern keine geschützten Eingangsbytes. Die Reihenfolge folgt der
 Registrierung, mit Rückweg in umgekehrter Reihenfolge. Die mandatory
-Security-/Settlement-Schritte sind keine entfernbaren Nutzer-Middleware. [neu]
+Security-/Settlement-Schritte sind keine entfernbaren Nutzer-Middleware.
 
 Die Diagnose-Middleware publiziert über eine separate, bereits konfigurierte
 Connection ohne dieselbe Diagnose-Middleware, damit kein Fehler-Event wieder
@@ -725,7 +739,7 @@ Texte und wirft den ursprünglichen Fehler erneut; der Fehler wird nicht
 versehentlich als Erfolg bestätigt. Ein fehlgeschlagenes Diagnose-Publish
 meldet sie lokal. Für garantiert vollständige Diagnosezustellung braucht es
 eine persistente Outbox; ein erfolgreicher Business-Callback wird nicht nur
-wegen eines Telemetriefehlers wiederholt. [neu]
+wegen eines Telemetriefehlers wiederholt.
 
 ### § 14.4 Sicherheitsgrenzen und spätere Prüfung
 
@@ -735,20 +749,125 @@ Der Server prüft Reply-Zielberechtigung und Nachrichtenlimits vor Handlerstart;
 im Mehrmandantenbetrieb gilt die Allowlist pro authentifiziertem Principal.
 Der gemeinsame HMAC-Key des Beispiels allein trennt keine Mandanten. Replies,
 Notices und Diagnose-Events benutzen dieselbe Schutzkette wie Events.
-Fehlende Signaturen erhalten keine Antwort an untrusted Rückkanäle. [neu]
+Fehlende Signaturen erhalten keine Antwort an untrusted Rückkanäle.
 
 Zusätzliche spätere Contract-Tests: unmittelbare Antwort vor Beginn von
 `await`, parallele Request-IDs, doppelte/späte Replies, Timeout bei laufendem
 Command, unzulässiges Reply-Topic, Warnung vor/nach Ergebnis, Notice-Duplikate,
 Notice-/Diagnose-Publish-Fehler, Fehler im Notice-Callback, Schemafehler im
 Result, Weitergabe eines Middleware-Rückgabewerts und Rückwurf der
-ursprünglichen Exception. Keine solchen Laufzeittests in diesem Entwurfs-PR. [neu]
+ursprünglichen Exception. Keine solchen Laufzeittests in diesem Entwurfs-PR.
 
 Quellen für §§ 13–14, abgerufen am 2026-09-12:
 
-- [RabbitMQ: RPC mit PHP](https://www.rabbitmq.com/tutorials/tutorial-six-php). [neu]
-- [PHP Enqueue: Commands, Replies und Promise](https://php-enqueue.github.io/quick_tour/). [neu]
-- [Symfony Messenger: Envelopes, Middleware und Handler-Ergebnisse](https://symfony.com/doc/current/messenger.html). [neu]
-- [NATS .NET: Request/Reply und Queue-Gruppen](https://nats.io/blog/nats-dotnet-v2-alpha-release/). [neu]
-- [MassTransit: Requests, Faults und Timeouts](https://masstransit.massient.com/concepts/requests). [neu]
-- [Laravel 12: Job-Middleware](https://laravel.com/framework/docs/12.x/queues#job-middleware). [neu]
+- [RabbitMQ: RPC mit PHP](https://www.rabbitmq.com/tutorials/tutorial-six-php).
+- [PHP Enqueue: Commands, Replies und Promise](https://php-enqueue.github.io/quick_tour/).
+- [Symfony Messenger: Envelopes, Middleware und Handler-Ergebnisse](https://symfony.com/doc/current/messenger.html).
+- [NATS .NET: Request/Reply und Queue-Gruppen](https://nats.io/blog/nats-dotnet-v2-alpha-release/).
+- [MassTransit: Requests, Faults und Timeouts](https://masstransit.massient.com/concepts/requests).
+- [Laravel 12: Job-Middleware](https://laravel.com/framework/docs/12.x/queues#job-middleware).
+
+## § 15 An alle Subscriber oder an einen Worker
+
+### § 15.1 Dasselbe Topic, bewusst gewählte Subscriptions
+
+| Ziel | Subscription-Namen | Ergebnis |
+|---|---|---|
+| Alle beteiligten Dienste informieren | `locks-service-a`, `locks-service-b`, `locks-service-c` | Jeder Dienst erhält eine Kopie und kann separat antworten [neu] |
+| Alle konkreten Instanzen informieren | Je Instanz ein stabiler eigener Name, etwa `locks-instance-17` | Jede erwartete Instanz erhält ihre eigene Kopie [neu] |
+| Einen Job verteilen | Alle Worker: `text-processors` | Ein verfügbarer Consumer erhält die konkrete Zustellung zur Bearbeitung [neu] |
+
+Ein Topic kann beides gleichzeitig haben, etwa eine Worker-Subscription und
+eine unabhängige Audit-Subscription. „An einen“ bedeutet deshalb nicht
+weltweit exklusiv, falls daneben weitere Subscriptions existieren. Für die
+Processing-Queue provisioniert man bewusst nur die ausführende Worker-Gruppe;
+Audit-Consumer führen den Job nicht aus. Die ersten beiden Muster brauchen
+die Fan-out-Capability: Redis-Gruppen, RabbitMQ-Queues oder SNS+SQS passen,
+ein einzelnes SQS-Queue-Backend kann nicht allen Gruppen Kopien liefern. [neu]
+
+### § 15.2 Lock-Koordination: alle bekannten Teilnehmer antworten
+
+[Beispiel 07](../../examples/api-draft/07-broadcast-locking.php) verwendet
+`publish('maintenance.locks', 'lock.acquire.v1', ...)`. Jeder Teilnehmer
+besitzt eine eigene Subscription auf diesem Topic, nimmt eine lokale Lease
+für seine Ressource und sendet `lock.state.v1` an den Rückkanal. Der Koordinator
+abonniert den Rückkanal vor dem Broadcast und zählt **Teilnehmer-IDs**, keine
+Nachrichtenanzahl. Doppelte Antworten erhöhen den Zähler nicht. Erst alle
+positiven Antworten der festen Teilnehmerliste erlauben den nächsten Schritt. [neu]
+
+Die Liste ist ein Membership-Snapshot aus der Anwendungskonfiguration, keine
+aus Queue-Subscriber-Zahlen erratene Größe. Erwartete Subscriptions werden
+vor dem Lauf angelegt. Offline-Teilnehmer bleiben erwartet und führen zum
+Timeout; neue Teilnehmer gehören erst zur nächsten Runde. Eine negative
+Antwort oder die Akquise-Deadline bricht die Runde ab und löst einen
+`lock.release.v1`-Broadcast aus. Jede Runde besitzt eine eindeutige ID;
+alte/fremde Antworten werden verworfen. Je Rückkanal läuft nur ein
+zuständiger Koordinator oder ein expliziter Demultiplexer. [neu]
+
+Der gezeigte `LocalLeaseManager` ist eine **Anwendungsabhängigkeit**, keine
+MQ-API. Erwerb ist idempotent pro Ressource/Runden-ID, hat eine absolute
+begrenzte Gültigkeit und verlängert sich bei Redelivery nicht. Release gibt
+nur die eigene Runde frei und hinterlässt bis zum Ablauf eine Abschlussmarke,
+damit verspätete Acquire-Nachrichten einen freigegebenen Lock nicht erneut
+nehmen. Leases laufen unabhängig vom Queue-Worker ab; dadurch bleiben bei
+Koordinator-Crash oder verlorenem Release keine unbegrenzten Locks zurück. [neu]
+
+„Alle haben ihren lokalen Lock bestätigt“ ist eine koordinierte Barriere,
+kein Beweis eines linearisierbaren globalen Locks oder dauerhafter Gesundheit
+aller Teilnehmer. Die kritische Arbeit muss vor der kleinsten sicheren
+Lease-Deadline enden; Clock-Skew und Ausführungszeit brauchen Reserve. Ein
+einfacher Zeitvergleich in PHP verhindert keine Pause nach dem Vergleich.
+Für geschützte Schreibzugriffe muss die Zielressource deshalb veraltete
+Operationen über einen autoritativen monotonen Fencing-Token ablehnen.
+Die Runden-ID ist nur Korrelation/Ownership, kein solcher Fencing-Token.
+Quorum/Konsens, Membership-Änderung und Lease-Verlängerung sind hier bewusst
+keine Behauptung der Queue-Abstraktion. [neu]
+
+Teilnehmer-IDs aus Reply-Payloads sind allein nicht vertrauenswürdig. Das
+Beispiel setzt kooperative Teilnehmer mit gemeinsamer Entwicklungs-Identität
+voraus. Produktion muss jede Antwort einer erlaubten Teilnehmeridentität
+zuordnen, etwa über getrennte Signing-Keys/Principals oder getrennte
+Reply-Topics mit durchgesetzten Publisher-ACLs. Ein gemeinsamer HMAC-Key
+beweist nicht, welcher Teilnehmer tatsächlich den Lock besitzt. [neu]
+
+### § 15.3 Processing-Queue: ein Worker verarbeitet und antwortet
+
+[Beispiel 08](../../examples/api-draft/08-processing-workers.php) startet
+mehrere Prozesse mit `respond('jobs.text', 'text-processors', ...)`.
+**Der Subscription-Name bleibt bei allen Workern identisch.** Die Factory
+erzeugt getrennte Transport-Consumer-IDs; eine Worker-ID dient im Beispiel
+nur als Antwortmetadatum, nicht als neue Subscription. Der Client ruft
+`request('jobs.text', 'text.process.v1', $params)->await()` auf und erhält
+Payload und die Kennung des verarbeitenden Workers zurück. [neu]
+
+Die Auswahl erfolgt brokerabhängig anhand verfügbarer Consumer, Credits,
+Prefetch und Polling. „Random“ wird hier als „beliebiger verfügbarer Worker,
+ohne feste Zielinstanz“ verstanden. Gleichmäßiger Zufall, Round-robin oder
+garantierte Fairness sind kein portabler Vertrag; auch mehrere Jobs
+hintereinander beim selben Worker sind zulässig. Wer eine bestimmte
+Verteilungsstrategie benötigt, braucht einen gesonderten Scheduler. [neu]
+
+Pro Zustellversuch wird ein Consumer ausgewählt; ein normaler Job wird
+nicht an alle Worker kopiert. Bei Crash, verlorenem Ack oder Lease-Ablauf
+kann derselbe Job dennoch erneut zugestellt werden. Ein pausierter alter
+Worker kann nach Lease-Verlust sogar noch weiterlaufen, während ein neuer
+übernimmt. „Nur ein Worker“ ist daher keine Exactly-once-/Seiteneffektgarantie:
+lange Verarbeitung braucht Lease-Pflege, kritische Aktionen benötigen
+Idempotenz oder ressourcenseitiges Fencing. Das Beispiel verarbeitet reinen
+Text ohne externe Seiteneffekte; Ergebnis-Publish erfolgt gemäß § 13 vor
+Request-Ack. [neu]
+
+### § 15.4 Spätere Prüfungen und Quellen
+
+Vorgesehene Contract-Tests: Broadcast an drei Subscriptions versus drei
+Worker einer Gruppe, doppelte Teilnehmerantworten, fehlender/negativer
+Teilnehmer, spätes Acquire nach Release, Koordinator-Crash, veraltete Lease,
+falsche Teilnehmeridentität und erneute Job-Ausführung nach Lease-Verlust.
+Diese Tests gehören zur späteren Implementierung, nicht zum Entwurfs-PR. [neu]
+
+- [Redis XREADGROUP: Verteilung innerhalb von Consumer-Gruppen](https://redis.io/docs/latest/commands/xreadgroup/). [neu]
+- [RabbitMQ Consumers: konkurrierende Consumer und Zustellsteuerung](https://www.rabbitmq.com/docs/consumers). [neu]
+- [Redis: begrenzte Lock-Gültigkeit, Ownership und Fencing-Hinweise](https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/). [neu]
+
+Abruf: 2026-09-12; die konkrete API und die Barrierenlogik sind der
+hier vorgeschlagene Anwendungsentwurf. [neu]

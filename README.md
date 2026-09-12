@@ -22,6 +22,13 @@ PHP-Dateien zeigen die vorgeschlagene API und sind noch nicht ausführbar.
 - [ZIP-Dateien und lokale Entwicklung](examples/api-draft/04-files-and-local.php)
 - [RPC: Command, Ergebnis, Warnings und Fehler](examples/api-draft/05-rpc.php)
 - [Metadaten und Diagnose-Middleware](examples/api-draft/06-metadata-middleware.php)
+- [Broadcast und Antworten aller Lock-Teilnehmer](examples/api-draft/07-broadcast-locking.php)
+- [Processing-Queue: ein verfügbarer Worker und ein Ergebnis](examples/api-draft/08-processing-workers.php)
+
+**An alle:** pro Empfänger eine eigene Subscription. **An einen:** alle Worker
+verwenden dieselbe Subscription. Das Backend verteilt die Zustellungen an
+verfügbare Worker; gleichmäßiger Zufall oder Exactly-once-Ausführung werden
+nicht vorausgesetzt.
 
 Die Alltags-API bleibt klein: `publish()` sendet ein Event, `subscribe()`
 empfängt Events, `request()->await()` erwartet eine Antwort, `respond()`
