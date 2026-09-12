@@ -72,7 +72,7 @@ Eine neue Subscription erhält nur Nachrichten ab ihrer Bindung, keine früheren
 
 ## Was der Anwendungsentwickler konfiguriert
 
-Verbindung und gemeinsame Vorgaben stehen in [config/message-queue.json](../config/message-queue.json). Der [Setup-Guide](setup.md) erklärt die bereits nutzbare Docker-Instanz und das Python-Skript. Die PHP-Beispiele verwenden nach Implementierung:
+Verbindung und gemeinsame Vorgaben stehen in [config/message-queue.json](../config/message-queue.json). Der [Setup-Guide](setup.md) erklärt die bereits nutzbare Docker-Instanz und das PHP-Skript. Die PHP-Beispiele verwenden nach Implementierung:
 
 ```php
 $mq = new PhoreMQ(...demoConnection());

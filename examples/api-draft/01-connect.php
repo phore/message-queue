@@ -15,7 +15,7 @@ use Phore\MessageQueue\Security\HmacSecurity;
 
 /**
  * API-ENTWURF: Die importierten MQ-Klassen existieren noch nicht.
- * Der Docker-Broker und setup.py sind unabhängig davon verwendbar: docs/setup.md.
+ * Der Docker-Broker und setup.php sind unabhängig davon verwendbar: docs/setup.md.
  * RabbitMQ ist der einzige Adapter. Keine Treiberregistrierung oder Brokerwahl.
  */
 

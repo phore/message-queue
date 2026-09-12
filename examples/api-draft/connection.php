@@ -12,7 +12,7 @@ use Phore\MessageQueue\ConnectionOptions;
  * Explizite Felder in $overrides ergänzen/überschreiben die Basisoptionen;
  * ausgelassene Felder behalten die Werte aus der Konfigurationsdatei.
  * JSON darf nur dokumentierte Optionswerte enthalten, keine PHP-Klassennamen.
- * Die Topologielisten liest setup.py; autoCreate erlaubt zusätzliche Demo-Bindungen.
+ * Die Topologielisten liest setup.php; autoCreate erlaubt zusätzliche Demo-Bindungen.
  * @return array{string, ConnectionOptions}
  */
 function demoConnection(?ConnectionOptions $overrides = null): array

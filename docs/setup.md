@@ -4,18 +4,18 @@ PhoreMQ wird zunächst ausschließlich für RabbitMQ umgesetzt. Der Adapter blei
 hinter einem Interface; eine Brokerauswahl oder Treiberregistrierung gibt es nicht.
 Die Anwendungsbegriffe sind **Namespace, Topic, Subscription und Nachrichtentyp**.
 
-**Bereits verwendbar:** Docker Compose und das Python-Setup in diesem Guide.
+**Bereits verwendbar:** Docker Compose und das PHP-Setup in diesem Guide.
 **Noch Entwurf:** sämtliche `PhoreMQ`-Klassen und PHP-Beispiele. Der Container
 installiert keine PHP-Library; `composer install` macht die Entwurfs-API nicht ausführbar.
 
 ## 1. Eine temporäre Instanz starten
 
-Voraussetzung: Docker mit Compose v2 und Python 3. Alle Befehle laufen aus dem
+Voraussetzung: Docker mit Compose v2 und PHP >= 8.5 CLI (für HTTP-Zugriffe mit `allow_url_fopen=1`). Alle Befehle laufen aus dem
 Repository-Verzeichnis:
 
 ```bash
 docker compose -f deployment/rabbitmq/compose.yaml up -d --wait
-python3 deployment/rabbitmq/setup.py
+php deployment/rabbitmq/setup.php
 ```
 
 Der erste Befehl startet RabbitMQ mit Management-Plugin. Der zweite legt die
@@ -50,7 +50,7 @@ Wenn die Demo nicht mehr benötigt wird, entfernt dieser Befehl Container und
 docker compose -f deployment/rabbitmq/compose.yaml down -v
 ```
 
-Ein anschließendes `up -d --wait` und `setup.py` ergeben einen frischen Demo-Broker.
+Ein anschließendes `up -d --wait` und `setup.php` ergeben einen frischen Demo-Broker.
 Die Demo nutzt einen einzelnen Knoten, besitzt also keine Ausfallredundanz.
 Für produktive Quorum Queues sind üblicherweise drei Knoten in getrennten
 Ausfallbereichen vorgesehen. [RabbitMQ Quorum Queues](https://www.rabbitmq.com/docs/quorum-queues)
@@ -97,7 +97,7 @@ Ein Client in einem anderen Container desselben Compose-Netzes verwendet
 | `rpc.enabled` | Bereitet pro Client einen eigenen Rückkanal vor, damit späteres `await()` möglich ist |
 | `rpc.replyNamespace` | Reservierter Bereich für interne Antwortziele; keine gemeinsame konkurrierende Reply-Queue |
 
-`setup.py` verarbeitet ausschließlich `connection`, `topics` und `subscriptions`;
+`setup.php` verarbeitet ausschließlich `connection`, `topics` und `subscriptions`;
 `options` sind Vorgaben für die geplante PHP-Library. Das Skript ist ein lokales
 Entwicklungswerkzeug mit festem Management-Endpunkt `127.0.0.1:15672`. Es erstellt
 keine Benutzer oder Namespaces; die Demo-Werte dafür setzt Compose beim ersten
@@ -130,11 +130,11 @@ nicht routbare Publishes ausdrücklich ab. [RabbitMQ Exchanges](https://www.rabb
 
 ## 4. Dynamisch oder per Setup-Skript?
 
-Beides ist möglich, aber nur das Python-Skript ist bereits vorhanden:
+Beides ist möglich, aber nur das PHP-Skript ist bereits vorhanden:
 
 | Vorgang | Bereits verwendbares Setup | Geplante PHP-Library |
 |---|---|---|
-| Fachliche Topologie vorher anlegen | Konfiguration bearbeiten, `setup.py` ausführen | Beim Start registrieren und mit `autoCreate: true` deklarieren |
+| Fachliche Topologie vorher anlegen | Konfiguration bearbeiten, `setup.php` ausführen | Beim Start registrieren und mit `autoCreate: true` deklarieren |
 | Bestehende Ressourcen weiterverwenden | Identische Deklarationen wiederholen | `autoCreate: false`, erwartete Topologie prüfen |
 | Neues Subject verwenden | Exakten Filter ergänzen oder Subscription ohne Typfilter verwenden | `publish(topic, type, payload)`; keine eigene Subject-Ressource |
 | Filter oder Queue-Eigenschaften ändern | Neue Subscription oder explizite Migration | Konflikt als Exception; keine automatische Migration |
@@ -169,7 +169,7 @@ kein Handler-Register; Callbacks werden weiterhin programmatisch oder über
 Attribute registriert. Ein neues Topic im JSON startet keinen Worker.
 
 Ohne `autoCreate` werden alle fachlichen Subscriptions einschließlich ihrer
-internen Retry-/Fehlerressourcen vorab provisioniert. Das kleine Python-Skript
+internen Retry-/Fehlerressourcen vorab provisioniert. Das kleine PHP-Skript
 zeigt die Basis- und Fehlerqueues; es provisioniert noch keine PhoreMQ-RPC-,
 Health- oder Retry-Laufzeit. `rpc.enabled` erlaubt ausdrücklich die dynamischen
 privaten Rückkanäle auch bei vorab angelegter fachlicher Topologie. Diese benötigen
@@ -184,7 +184,7 @@ nicht einfach neu deklariert werden. [RabbitMQ Queue-Deklarationen](https://www.
 ## 5. Prüfung und Grenzen
 
 ```bash
-python3 deployment/rabbitmq/setup.py --dry-run
+php deployment/rabbitmq/setup.php --dry-run
 ```
 
 Der Dry Run validiert die Topologiedaten und zeigt die geplanten Operationen,

@@ -7,14 +7,14 @@ Fallback-Logik. Öffentliche Konfiguration verwendet die generischen Begriffe
 Namespace, Topic, Subscription und Nachrichtentyp.
 
 **Status: Die PHP-API ist noch nicht implementiert.** Composer-Metadaten und
-Autoloading stammen aus der Projektvorlage. Docker Compose und das Python-
+Autoloading stammen aus der Projektvorlage; PHP >=8.5 ist verbindlich. Docker Compose und das PHP-
 Setup sind unabhängig von der geplanten PHP-Library verwendbar.
 
 Vom Repository-Verzeichnis aus:
 
 ```bash
 docker compose -f deployment/rabbitmq/compose.yaml up -d --wait
-python3 deployment/rabbitmq/setup.py
+php deployment/rabbitmq/setup.php
 ```
 
 AMQP: `amqp://demo:demo@127.0.0.1:5672/demo`; Management:
@@ -74,3 +74,5 @@ Nachträglich initialisieren oder aktualisieren:
 git submodule update --init --recursive
 git submodule update --remote --merge
 ```
+
+Projektregel: Ausführbare Beispiele und Setup-Skripte werden ausschließlich in PHP >=8.5 gepflegt; siehe [AGENTS.md](AGENTS.md).

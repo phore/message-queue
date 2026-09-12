@@ -12,21 +12,24 @@
 | 2026-09-12 | dermatthes | §§ 5, 13.4: Worker-Limits, fehlendes minMessages und await-Timeout-Exception in den Beispielen erläutert |
 | 2026-09-12 | dermatthes | §§ 4, 4.1, 7, 8, 10, 11.1, 13.1, 13.2, 13.4, 13.5: Kurze lokale file-Beispiele, zentrale Verbindungsvorgaben, Callback-Fehler und typisierte RPC-Exceptions ergänzt |
 | 2026-09-12 | dermatthes | §§ 1–5, 7–16: RabbitMQ als einzige Umsetzung beschlossen; Interface ohne Austauschlogik, neutrale Konfiguration, Docker-Setup und Beispiele vereinheitlicht |
+| 2026-09-12 | dermatthes | §§ 1, 10: PHP 8.5 als Mindestversion und ausschließlich PHP-Beispiele/Setup festgelegt |
 
 ## § 1 Abstract und Lieferumfang
 
-**Architekturentscheidung, 2026-09-12: Die erste Umsetzung verwendet ausschließlich RabbitMQ über AMQP 0-9-1.** Ein `RabbitMQConnector` implementiert `ConnectorInterface`; die MQ-Logik spricht nur dieses Interface an. Es gibt keine Adapterregistrierung, Treiberauswahl, Capability-Aushandlung, Fallbacks oder Laufzeit-Austauschlogik. Die Interface-Grenze ermöglicht spätere Änderungen, ohne heute zusätzliche Broker zu entwerfen. [neu]
+**Architekturentscheidung, 2026-09-12: Die erste Umsetzung verwendet ausschließlich RabbitMQ über AMQP 0-9-1.** Ein `RabbitMQConnector` implementiert `ConnectorInterface`; die MQ-Logik spricht nur dieses Interface an. Es gibt keine Adapterregistrierung, Treiberauswahl, Capability-Aushandlung, Fallbacks oder Laufzeit-Austauschlogik. Die Interface-Grenze ermöglicht spätere Änderungen, ohne heute zusätzliche Broker zu entwerfen.
 
 Die frameworkunabhängige PHP-Library bietet Topics, dauerhafte Subscriptions,
 konkurrierende Worker, optionale strukturelle `phore/schema`-Hydration und
 PHP-Attribute. `PhoreMQ` akzeptiert DSN oder Adapter mit `ConnectionOptions`.
 RPC, Fehlerantworten, Metadaten, Middleware und Systemcheck bleiben Bestandteil
-des Entwurfs. Signierung und Dateireferenzen behalten ihre fachlichen Verträge. [neu]
+des Entwurfs. Signierung und Dateireferenzen behalten ihre fachlichen Verträge.
 
 **Die PHP-API ist noch nicht implementiert.** Composer-Metadaten und Autoloading
-bleiben unveränderte Template-Werte; Beispiele benötigen später PHP >=8.3.
-Der Docker-Start und das Python-Setup aus [Setup](../setup.md) sind davon
-unabhängige, verwendbare Entwicklungsdateien; sie implementieren keine MQ-Library. [neu]
+stammen aus der Vorlage; die PHP-Mindestversion ist verbindlich >=8.5. [geändert]
+Der Docker-Start und das PHP-Setup aus [Setup](../setup.md) sind davon
+unabhängige Entwicklungsdateien; sie implementieren keine MQ-Library. Alle
+ausführbaren Beispiele und Setup-Skripte dieses Projekts sind in PHP >=8.5
+zu schreiben; verbindliche Projektregeln stehen in [AGENTS.md](../../AGENTS.md). [geändert]
 
 | Umfang | Entscheidung |
 |---|---|
@@ -35,10 +38,10 @@ unabhängige, verwendbare Entwicklungsdateien; sie implementieren keine MQ-Libra
 | API | `publish`, `subscribe`, `respond`, `run`, optional `await`; `check` für Diagnose |
 | Konfiguration | Generische Namen; `topic`, `subscription`, `type`, `namespace`, `maxInFlight`, `autoCreate` |
 | Entwicklung | Derselbe RabbitMQ-Adapter gegen einen Docker-Broker |
-| Dateiübertragung | Verifizierte Referenzen über ausdrücklich injizierten Dateispeicher; keine eigene Speicherplattform [neu] |
+| Dateiübertragung | Verifizierte Referenzen über ausdrücklich injizierten Dateispeicher; keine eigene Speicherplattform |
 
 Die Referenz für den Entwicklungsaufbau ist RabbitMQ 4.3 mit Management-Plugin.
-Die produktive PHP-Client-Abhängigkeit wird bei Implementierung festgelegt. [neu]
+Die produktive PHP-Client-Abhängigkeit wird bei Implementierung festgelegt.
 
 ### § 1.1 Kleine API auf einen Blick
 
@@ -90,7 +93,7 @@ verwaltet die Library. Details und standardisierter Vertrag in § 16.
 | Subscription | Dauerhafte benannte Sicht auf ein Topic, etwa `billing-users` |
 | Worker | Ein Prozess, der für eine Subscription arbeitet; mehrere teilen sich die Arbeit |
 | Envelope | Transportneutrale Metadaten, JSON-Payload und Attachment-Deskriptoren |
-| Delivery | Eine konkrete Zustellung inklusive opaque Receipt und Ack-/Retry-Steuerung [geändert] |
+| Delivery | Eine konkrete Zustellung inklusive opaque Receipt und Ack-/Retry-Steuerung |
 
 Jede dauerhafte Subscription erhält eine Kopie. Worker derselben Subscription
 sind konkurrierende Consumer. Beispiel: `billing-users` und `audit-users`
@@ -110,7 +113,7 @@ eine unklare Publish-Bestätigung bei Verbindungsabbruch.
 keine Verarbeitung durch Empfänger. `SendResult::await()` liefert dagegen die
 fachliche Antwort eines Responders, keine Bestätigung aller Subscriber. Es gibt keine
 Exactly-once-Garantie und keine globale Reihenfolge.
-Fachliche Seiteneffekte benötigen eine stabile fachliche Idempotenz-ID; Wiederzustellungen behalten zusätzlich dieselbe `messageId`. [geändert]
+Fachliche Seiteneffekte benötigen eine stabile fachliche Idempotenz-ID; Wiederzustellungen behalten zusätzlich dieselbe `messageId`.
 
 `subscribe()` bindet eine benannte Subscription und prüft ihren Vertrag.
 Eine neu angelegte Subscription empfängt erst Nachrichten ab Erstellung ihrer
@@ -118,7 +121,7 @@ Bindung. Ein bestehender Rückstand bleibt bei Worker-Neustarts erhalten.
 Es gibt weder Start-Cursor noch Replay-Option. In Produktion werden fachliche
 Topics und Subscriptions vorab eingerichtet. `autoCreate: true` erlaubt
 explizit ihre dynamische Anlage; `cancel()` beendet nur den lokalen Consumer,
-löscht aber weder Subscription noch Rückstand. [neu]
+löscht aber weder Subscription noch Rückstand.
 
 ## § 3 Abstraktionsschichten und Erweiterungspunkte
 
@@ -133,7 +136,7 @@ löscht aber weder Subscription noch Rückstand. [neu]
 | `MessageSecurityInterface` | Unveränderliche Nachrichtenbytes schützen und vor Verwendung verifizieren |
 | `ConnectorInterface` | RabbitMQ kapseln: Topologie prüfen/anlegen, Bytes senden/empfangen und Zustellungen abschließen |
 | `PayloadStoreInterface` | Streams ablegen, Referenzen auflösen, Lebensdauer verwalten |
-| `RetryPolicy` / `FailureStoreInterface` | Vorübergehende Fehler wiederholen, endgültige Fehler sicher ablegen [geändert] |
+| `RetryPolicy` / `FailureStoreInterface` | Vorübergehende Fehler wiederholen, endgültige Fehler sicher ablegen |
 
 Sendepfad: Typ/Topic auflösen → Send-Middleware ausführen → Daten normalisieren
 und ggf. validieren → Dateien ablegen → Envelope kodieren → signieren → Größenprüfung
@@ -142,7 +145,7 @@ Zeit-/Zielbindung prüfen → Envelope dekodieren → optional Dateien verifizie
 → lokale Struktur prüfen/hydrieren → Handler-Middleware und Handler ausführen
 → bei RPC finale Antwort bestätigen lassen → Ack. Dateiinhalte werden erst
 bei Zugriff geladen, bleiben aber vor Nutzung zu prüfen. Middleware darf weder
-die Signaturprüfung noch Settlement umgehen; Details in § 14.3. [geändert]
+die Signaturprüfung noch Settlement umgehen; Details in § 14.3.
 
 Der Konnektor kennt keine Anwendungs-DTOnamen oder Callbacks. Seine
 vorgeschlagenen primitiven Operationen sind `ensureTopology(TopologyDefinition, bool $autoCreate): void`,
@@ -150,7 +153,7 @@ vorgeschlagenen primitiven Operationen sind `ensureTopology(TopologyDefinition, 
 `ack(DeliveryToken): void`, `release(DeliveryToken, RetryOptions): void` und
 `close(): void`. `receive` respektiert Timeout/Stop und liefert `InboundFrame`
 mit Routingkontext und Receipt; nackte Receipts gelangen nie in Nachrichten.
-Ungültige oder bereits erledigte Receipts erzeugen eine Settlement-Exception. [geändert]
+Ungültige oder bereits erledigte Receipts erzeugen eine Settlement-Exception.
 
 Ein `MessageSecurityInterface` bietet `protect(string $envelopeBytes,
 SecurityContext $context): ProtectedFrame` und `verify(ProtectedFrame $frame,
@@ -164,7 +167,7 @@ Ein Provider kann auch verschlüsseln; HMAC allein tut dies nicht.
 [01-connect.php](../../examples/api-draft/01-connect.php) zeigt die Varianten.
 Der Konstruktor verbindet sofort, einmal pro Prozess; `close()` gibt Ressourcen
 idempotent frei. `stop()` beendet nur den Worker-Loop. Teilweise geöffnete
-Ressourcen werden bei Fehlern geschlossen. Ein Adapter gehört exklusiv einem MQ. [neu]
+Ressourcen werden bei Fehlern geschlossen. Ein Adapter gehört exklusiv einem MQ.
 
 ```php
 $mq = new PhoreMQ($dsn, $options);
@@ -178,26 +181,26 @@ keine Provider-Registry, keine Verbindungsattribute und keine dynamische Auswahl
 `__construct(string|ConnectorInterface $connection, ?ConnectionOptions $options = null)`.
 Ein String wird ausschließlich als RabbitMQ-AMQP-Verbindung ausgewertet.
 Direkte Injektion bleibt für die Interface-Grenze und Tests erhalten; sie umgeht
-weder Codec, Security noch Middleware. Weitere Implementierungen werden nicht geliefert. [neu]
+weder Codec, Security noch Middleware. Weitere Implementierungen werden nicht geliefert.
 
 | DSN | Bedeutung |
 |---|---|
 | `amqp://demo:demo@127.0.0.1:5672/demo` | Lokaler Broker, Namespace `demo` |
-| `amqps://user:password@mq.example.org:5671/app` | TLS mit Zertifikats-/Hostprüfung, Namespace `app` [neu] |
+| `amqps://user:password@mq.example.org:5671/app` | TLS mit Zertifikats-/Hostprüfung, Namespace `app` |
 
 DSN-Bestandteile werden einmal percent-dekodiert; `@` im Passwort ist `%40`,
 der Namespace `/` wird als `/%2F` dargestellt. Ungültige Ports, Schemes,
 Query-Optionen oder Pfade werden abgelehnt. Fehlerausgaben redigieren Credentials.
 Kein Environment-Zugriff und keine automatische Secret-Erzeugung. Die
 Security-Policy muss explizit vorliegen; eine reine DSN ohne erforderliche
-Optionen schlägt früh mit `InvalidConfigurationException` fehl. [neu]
+Optionen schlägt früh mit `InvalidConfigurationException` fehl.
 
 `ConnectionOptions` bündelt `autoCreate` (Standard false), den expliziten
 `managementUrl` für Topologieprüfungen, `maxInFlight`
 (Standard 1, positive Ganzzahl), Security, Registry, optionale Schema-Bridge,
 RPC, Health, Middleware und optionalen PayloadStore. Konfiguration wird als
 Snapshot übernommen; bewusst geteilte Zustandsobjekte wie `HealthState`
-bleiben geteilt. Unbekannte Optionen sind Fehler. [neu]
+bleiben geteilt. Unbekannte Optionen sind Fehler.
 
 `ConnectionOptions::fromArray(array $values, ?ConnectionOptions $overrides = null)`
 ist ein geplanter Konfigurationshelfer, keine existierende Implementierung.
@@ -207,14 +210,14 @@ den Rückkanalmodus aus § 13.1. Keine Klassennamen oder ausführbarer Code aus 
 Explizit gesetzte Override-Felder ersetzen die entsprechenden Basiswerte;
 ausgelassene Felder behalten sie. Objekt-Abhängigkeiten werden nur programmatisch
 injiziert. Die optionale Schema-Bridge wird bei installiertem `phore/schema`
-verwendet; andernfalls scheitert benötigte DTO-Hydration früh. [neu]
+verwendet; andernfalls scheitert benötigte DTO-Hydration früh.
 
 ### § 4.1 Kurzer lokaler Einstieg in den Beispielen
 
 [config/message-queue.json](../../config/message-queue.json) ist die gemeinsame
 Quelle für Verbindung, Optionswerte und deklarierte fachliche Topologie.
 [connection.php](../../examples/api-draft/connection.php) lädt diese Datei
-explizit. Die Beispiele erzeugen weiterhin ein einzelnes `PhoreMQ`: [neu]
+explizit. Die Beispiele erzeugen weiterhin ein einzelnes `PhoreMQ`:
 
 ```php
 $mq = new PhoreMQ(...demoConnection());
@@ -226,11 +229,11 @@ Die Demo ist ausdrücklich unsigniert und nur für den isolierten lokalen Broker
 Für produktive Dienste werden eigene Credentials, TLS und die HMAC-Policy
 konfiguriert. Broker-Passwort und Signierschlüssel sind verschiedene Werte.
 Die Demo richtet pro Client einen eigenen Rückkanal ein. Es gibt keinen
-impliziten Dateispeicher; Beispiel 04 verlangt ihn ausdrücklich vom Aufrufer. [neu]
+impliziten Dateispeicher; Beispiel 04 verlangt ihn ausdrücklich vom Aufrufer.
 
 Docker-Start, Einrichtung, Namensabbildung, dynamische Anlage und Bereinigung
 sind im [Setup-Guide](../setup.md) beschrieben. Bestehende Subscriptions behalten
-ihren Backlog; unabhängige Beispieldurchläufe beginnen mit einem frischen Demo-Broker. [neu]
+ihren Backlog; unabhängige Beispieldurchläufe beginnen mit einem frischen Demo-Broker.
 
 ## § 5 Senden, empfangen und Worker-Lebenszyklus
 
@@ -291,7 +294,7 @@ Ohne Typfilter muss der Array-Handler alle
 Nachrichtentypen des Topics verarbeiten können. Das Binding filtert bereits bei der Zustellung in die Queue. Ein dennoch
 eingehender unpassender Frame ist ein Routing-/Validierungsfehler und wird
 sicher abgelegt; kein separater Handler darf dieselbe Subscription mit anderem Filter übernehmen.
-Filteränderungen benötigen eine neue Subscription oder explizite Migration. [geändert]
+Filteränderungen benötigen eine neue Subscription oder explizite Migration.
 
 Die bisherigen Aufrufe `subscribe($topic, $subscription, $handler, $options)`
 bleiben gültig. Neu ist `subscribe($callback)` bzw.
@@ -332,7 +335,7 @@ Polls und vorgeholte, noch nicht bearbeitete Zustellungen zählen nicht.
 Ein wegen ungültigem Typ abgelehnter Delivery zählt als abgearbeiteter Versuch. Das Limit ist keine Anzahl erfolgreicher oder
 eindeutiger Geschäftsoperationen. Nach Erreichen wird keine weitere fachliche
 Zustellung verarbeitet; bereits vorgeholte Einträge bleiben sicher unbestätigt
-bzw. werden beim Schließen des Empfangschannels erneut verfügbar. [geändert]
+bzw. werden beim Schließen des Empfangschannels erneut verfügbar.
 
 `maxSeconds` ist das Gesamtbudget ab Loop-Start, einschließlich Warten und
 Verarbeitung. `idleTimeoutSeconds` begrenzt eine zusammenhängende Wartephase
@@ -359,7 +362,7 @@ Fehler gehen vor Bestätigung in den FailureStore. `AckMode::Manual` erlaubt
 Zustellung zulässig. Rückkehr ohne Settlement gibt die Nachricht erneut frei.
 Eine Lease-Verlängerungsmethode gehört nicht zur API. Lange synchrone Handler
 brauchen passende Broker-Ack-Fristen und eine Laufzeit, die AMQP-Heartbeats
-bedient; eine offene TCP-Verbindung allein verhindert keinen Heartbeat-Abbruch. [geändert]
+bedient; eine offene TCP-Verbindung allein verhindert keinen Heartbeat-Abbruch.
 
 Retry erfolgt durch RabbitMQ-Redelivery und die in § 7 beschriebene Adapterlogik.
 Es darf keine verlustbehaftete Folge aus Ack vor erneutem Publish geben.
@@ -367,7 +370,7 @@ Nichtatomare Kopier-vor-Ack-Schritte dürfen Duplikate erzeugen und müssen
 dies dokumentieren. Fehler im FailureStore führen zu **keinem Ack** und
 beenden den Worker mit Infrastrukturfehler. Ein Error-Observer bekommt
 sanitisierte Fehlerdaten; systemische Transportfehler werden aus `run`
-geworfen statt in einer Endlosschleife verborgen. [neu]
+geworfen statt in einer Endlosschleife verborgen.
 
 ## § 6 SDK-Typen, Attribute und strukturelle Kompatibilität
 
@@ -546,7 +549,7 @@ es bleibt ausschließlich API-Entwurf.
 ## § 7 RabbitMQ-Adapter und Konfigurationsabbildung
 
 Die öffentliche API verwendet generische Begriffe. RabbitMQ-Begriffe erscheinen
-nur im Adapter, Deployment und zur Erklärung der konkreten Abbildung. [neu]
+nur im Adapter, Deployment und zur Erklärung der konkreten Abbildung.
 
 | Öffentlicher Begriff | RabbitMQ-Abbildung im ersten Adapter |
 |---|---|
@@ -557,18 +560,18 @@ nur im Adapter, Deployment und zur Erklärung der konkreten Abbildung. [neu]
 | Subscription ohne Typfilter | Binding mit `#`; empfängt alle Typen dieses Topics |
 | Subscription mit `type` | Binding mit genau diesem Typ; keine öffentliche Wildcard-Sprache |
 | `maxInFlight` | Consumer-Prefetch; keine Zahl parallel ausgeführter PHP-Callbacks |
-| Fehlerablage | Quorum Queue `phore.failure:users:audit-users` je Subscription [neu] |
+| Fehlerablage | Quorum Queue `phore.failure:users:audit-users` je Subscription |
 
 Namen bestehen aus einem führenden Buchstaben/Unterstrich und höchstens 99
 weiteren Buchstaben, Ziffern, Unterstrichen, Punkten oder Bindestrichen.
 Doppelpunkte in physischen Namen sind dadurch eindeutige Trenner. Reservierte
-interne Namen beginnen mit `_phore`; Anwendungstopologien verwenden sie nicht. [neu]
+interne Namen beginnen mit `_phore`; Anwendungstopologien verwenden sie nicht.
 
 `publish` verwendet persistente Frames, Publisher Confirms und `mandatory`.
 Eine nicht routbare Nachricht wirft `UnroutableMessageException`; eine positive
 Publish-Bestätigung beweist keine Handler-Bereitschaft und nicht die Existenz
 aller fachlich erwarteten Subscriptions. Fachliche Bindungen müssen vor Publish
-existieren. Eine Exchange selbst speichert keinen Backlog. [neu]
+existieren. Eine Exchange selbst speichert keinen Backlog.
 
 `subscribe` validiert/anlegt Exchange, Queue und Binding gemäß `autoCreate`.
 Identische Definitionen sind wiederholbar. Abweichende Typfilter, Queue-Eigenschaften
@@ -579,7 +582,7 @@ strikte Prüfung nutzt die über `managementUrl` konfigurierte Management-API
 mit passenden Rechten. Deren Zugang verwendet die expliziten Verbindungscredentials;
 produktive Endpunkte müssen HTTPS mit Zertifikatsprüfung verwenden. Keine
 ableitende URL-Heuristik und kein Fallback nach fehlgeschlagener Prüfung. Ohne Prüfmöglichkeit folgt
-`TopologyVerificationException`, keine Behauptung erfolgreicher Vollprüfung. [neu]
+`TopologyVerificationException`, keine Behauptung erfolgreicher Vollprüfung.
 
 Retry-Veröffentlichungen gehen ausschließlich über ein internes Ziel zurück
 an dieselbe Subscription, niemals erneut über die fachliche Topic-Exchange.
@@ -587,7 +590,7 @@ Verzögerung erfolgt mit internen Wartequeues fester TTL und Rückführung an di
 Zielqueue. Erst nach bestätigtem Retry-/Fehler-Publish wird das Original bestätigt.
 Crash-Fenster dürfen Duplikate, aber kein vorzeitiges Erfolgs-Ack erzeugen.
 Der unveränderte signierte fachliche Frame bleibt erhalten; Versuchszähler
-liegen in vertrauenswürdig verwalteten Transportmetadaten (§ 11.1). [neu]
+liegen in vertrauenswürdig verwalteten Transportmetadaten (§ 11.1).
 
 Quorum Queues erhalten bei der Einrichtung bestätigtes Dead-Lettering mit
 `reject-publish` und einem eigenen Fehlerziel. Der automatische Delivery-Limit-
@@ -595,7 +598,7 @@ Default wird explizit deaktiviert; die begrenzte Handler-Retry-Policy verwaltet
 PhoreMQ. Transportabbrüche können zusätzliche Zustellversuche auslösen und
 werden nicht als exakte Zahl bereits gestarteter Handler interpretiert.
 Die Fehlerqueue erhält keine automatische Ablaufzeit. Betriebsseitige Limits
-werden bewusst gesetzt und überwacht; die Demo ist kein Hochverfügbarkeitscluster. [neu]
+werden bewusst gesetzt und überwacht; die Demo ist kein Hochverfügbarkeitscluster.
 
 ### § 7.1 Was andere PHP-Abstraktionen bereits vorsehen [gelöscht]
 
@@ -607,7 +610,7 @@ Signaturverfahren. Verbindungskonfiguration verlangt eine explizite Policy:
 HMAC oder bewusstes `UnsignedSecurity` für isolierte Tests (§ 4.1). Kein pro Prozess
 neu erzeugtes Wegwerf-Secret, fest eingebauter Schlüssel oder stillschweigend
 fehlendes Secret. Ein Empfänger mit
-HMAC-Policy weist unsignierte Nachrichten immer zurück. [geändert]
+HMAC-Policy weist unsignierte Nachrichten immer zurück.
 
 Das signierte Envelope enthält Protokollversion, `messageId`, fachlichen Typ,
 Topic, Audience, UTC-`issuedAt`, optional `expiresAt`, Content-Type, Payload,
@@ -633,7 +636,7 @@ Zeitprüfung toleriert begrenzte Uhrabweichung und lehnt zukünftige oder
 abgelaufene Nachrichten ab. Ein optionales maximales Alter muss zum gesamten
 Queue-Backlog und Retry-Fenster passen; kein pauschales Fünf-Minuten-
 Limit für dauerhafte Queues. Redelivery behält ID, Bytes und ursprüngliche
-Signatur. Broker-Versuchszähler gehören nicht zum unveränderlichen Envelope. [geändert]
+Signatur. Broker-Versuchszähler gehören nicht zum unveränderlichen Envelope.
 
 Signierung verhindert Replay allein nicht. Eine optionale Inbox speichert
 `(audience, subscription, messageId)` mit Zuständen processing/completed und
@@ -641,7 +644,7 @@ begrenzten Leases. Erst erfolgreicher Abschluss markiert completed;
 fehlgeschlagene Versuche dürfen erneut verarbeitet werden. Ein früher globaler
 Nonce-Verbrauch würde legitime Wiederholungen und andere Subscriptions
 blockieren. Atomizität zwischen fachlicher DB-Änderung und Inbox erfordert
-Anwendungs-/Transaktionsintegration, nicht nur eine transportseitige Duplikaterkennung. [geändert]
+Anwendungs-/Transaktionsintegration, nicht nur eine transportseitige Duplikaterkennung.
 
 Ungültige Signaturen werden ohne Callback quarantänisiert oder nach expliziter
 Policy verworfen, niemals endlos wiederholt. Quarantäne speichert begrenzte
@@ -655,7 +658,7 @@ Broker-ACLs und sicherer Dateispeicher bleiben zusätzlich erforderlich.
 [Dateibeispiel: 04-files-and-local.php](../../examples/api-draft/04-files-and-local.php).
 Die Anwendung übergibt `Attachment::fromPath(...)` oder einen Stream;
 die Queue verschickt einen verifizierbaren Deskriptor. Ein konfigurierter
-`PayloadStoreInterface` übernimmt Upload und spätere Auflösung. Binärdaten werden nicht unbeschränkt base64-kodiert in die Queue geschrieben. [geändert]
+`PayloadStoreInterface` übernimmt Upload und spätere Auflösung. Binärdaten werden nicht unbeschränkt base64-kodiert in die Queue geschrieben.
 
 Der Deskriptor enthält einen opaken Store-Key, Größe, SHA-256, MIME-Typ,
 Dateiname und Lebensdauer. Er ist Teil der Signatur; der Digest allein ist
@@ -679,7 +682,7 @@ RabbitMQ speichert ausschließlich die Referenz, keine automatisch verwaltete ZI
 für Dateigröße, Zahl der Attachments, Downloads und temporären Speicher.
 Automatisches Offloading beliebig großer JSON-Bodies sowie Chunking mit
 Reassembly sind spätere Erweiterungen und kein impliziter Bestandteil von
-`publish`. Ohne Store oder bei zu großem Frame folgt eine eindeutige Exception. [neu]
+`publish`. Ohne Store oder bei zu großem Frame folgt eine eindeutige Exception.
 
 ## § 10 Lokale Entwicklung mit RabbitMQ
 
@@ -688,14 +691,14 @@ Die Entwicklung verwendet denselben Adapter wie der spätere Betrieb.
 RabbitMQ-Knoten mit Management-Plugin und Demo-Namespace. Ports sind nur an
 Loopback gebunden. Das benannte Volume überlebt Neustarts; `down -v` entfernt
 gezielt den temporären Demo-Zustand. Ein einzelner Quorum-Knoten besitzt keine
-Ausfallredundanz. Anleitung und ausführbare Befehle: [Setup](../setup.md). [neu]
+Ausfallredundanz. Anleitung und ausführbare Befehle: [Setup](../setup.md).
 
-[setup.py](../../deployment/rabbitmq/setup.py) übersetzt die neutrale
+[setup.php](../../deployment/rabbitmq/setup.php) übersetzt die neutrale
 Konfigurationsdatei in RabbitMQ-Deklarationen über dessen HTTP-Management-API.
-Es benötigt nur Python 3, keine PHP-Library. `--dry-run` prüft und zeigt die
+Es benötigt PHP >=8.5 CLI mit `allow_url_fopen=1`, keine installierte PhoreMQ-Library. `--dry-run` prüft und zeigt die
 Operationen ohne Verbindung. Das Skript legt nichts durch Publish an und führt
 keine Handler aus. Es löscht keine Ressourcen; entfernte Konfigurationseinträge
-entfernen daher keine existierenden Queues. Migrationen sind explizite Vorgänge. [neu]
+entfernen daher keine existierenden Queues. Migrationen sind explizite Vorgänge. [geändert]
 
 ## § 11 Exceptions und Diagnose
 
@@ -725,14 +728,14 @@ Payload, Secret, signierter Download-Link oder Receipt im normalen Fehlertext.
 | `AttachmentUnavailableException` / `AttachmentIntegrityException` | Storefehler ggf. retrybar; falscher Digest endgültig |
 | `RetryableMessageException` / `RejectMessageException` | Explizite fachliche Wiederholung bzw. endgültige Ablehnung |
 | `SettlementException` | Ack fehlgeschlagen oder Delivery-Channel geschlossen; Duplikate berücksichtigen |
-| `FailureStoreException` | Sichere Fehlerablage fehlgeschlagen; kein Ack, Worker abbrechen [geändert] |
+| `FailureStoreException` | Sichere Fehlerablage fehlgeschlagen; kein Ack, Worker abbrechen |
 
 Validierung meldet konkrete Pfade und erwartete Typen, aber keine sensiblen
 Istwerte. Nicht passende Typen werden im Binding gefiltert. Ein dennoch
 zugestellter unpassender Typ ist ein sicher abzulegender Routingfehler; fehlt
 einem Handler ein benötigtes Schema, ist dies ein Mappingfehler. Nicht explizit klassifizierte Handler-Exceptions werden
 begrenzt wiederholt und anschließend abgelegt. Syntax-/Konfigurationsfehler
-sind keine Nachrichten-Retries. [neu]
+sind keine Nachrichten-Retries.
 
 RPC ergänzt `RequestTimeoutException`, `RemoteCommandException`,
 `InvalidReplyException` und `RpcNotConfiguredException`. Die lokal vom
@@ -767,7 +770,7 @@ der Retry-Übergabe kann denselben Versuch wiederholen: vier Versuche sind eine
 Grenze der regulären Handler-Retry-Runden, keine Exactly-once-Ausführungszählung. Die Policy bleibt über `SubscriptionOptions::retryPolicy`
 austauschbar. Diese Defaults sind unsere Designentscheidung, keine Zusage des
 Brokers. Ein laufender Retry blockiert nicht durch sleep den ganzen Worker;
-der Job wird verzögert wieder verfügbar. [geändert]
+der Job wird verzögert wieder verfügbar.
 
 Nach endgültiger Ablehnung oder ausgeschöpften Versuchen wird zuerst der
 FailureStore sicher bestätigt, dann die Ursprungszustellung beendet. Ohne
@@ -776,7 +779,7 @@ beendet den Loop. Der RabbitMQ-Adapter verwendet die zugehörige Fehlerqueue aus
 enthalten ID, Subscription, Versuchszahl, Zeit und sichere Diagnose; Payloads
 und Stacktraces sind nur in zugriffsgeschützter lokaler Ablage zulässig, nicht
 ungefiltert in Events oder Frontend-Antworten. Manuelles Redrive erfolgt erst
-nach Ursachenklärung mit erhaltenem Bezug und neuer expliziter Retry-Runde. [geändert]
+nach Ursachenklärung mit erhaltenem Bezug und neuer expliziter Retry-Runde.
 
 Bei technischen RPC-Fehlern wartet der Client über die zulässigen Retries.
 Nach endgültigem Scheitern sendet die Runtime, soweit Rückkanal und Deadline
@@ -795,13 +798,13 @@ muss sie für korrekte Retry-/Ack-Entscheidung weiterwerfen. Prozesskill oder
 Speichermangel sind nicht zuverlässig abfangbar: fehlendes Ack und das
 Schließen des Delivery-Channels ermöglichen Recovery. Externe Seiteneffekte werden nicht zurückgerollt;
 Idempotenz oder anwendungsseitige Transaktionen bleiben nötig. Ein bereits
-manuell gesetztes Ack lässt sich durch eine spätere Exception nicht widerrufen. [geändert]
+manuell gesetztes Ack lässt sich durch eine spätere Exception nicht widerrufen.
 
 Orientierung: [RabbitMQ – Acknowledgements](https://www.rabbitmq.com/docs/confirms)
 unterscheidet Bestätigung, Requeue und Dead Letter. Unser Entwurf verbietet
 stilles Verwerfen ohne sichere Ablage und begrenzt auch ausdrücklich retrybare
 Fehler. Abruf 2026-09-12. Spätere Tests: Retry-Zählung über Neustarts, Fehlerablage
-ausgefallen, Middleware schluckt/erhält Fehler, RPC-Endfehler und manuelles Ack. [neu]
+ausgefallen, Middleware schluckt/erhält Fehler, RPC-Endfehler und manuelles Ack.
 
 ## § 12 Paketgrenzen, spätere Prüfungen und Quellen
 
@@ -809,7 +812,7 @@ In die Library gehören Transportvertrag, Registry, Worker-Lebenszyklus,
 Serialization, optionale Schema-Bridge, Security-/PayloadStore-Schnittstellen
 und konsistente Exceptions. Der RabbitMQ-Adapter gehört zur ersten Implementierung; seine PHP-AMQP-
 Abhängigkeit wird bei der Implementierungsplanung festgelegt. SDK-Verträge lassen sich unabhängig
-von Brokerinstallationen verteilen. [geändert]
+von Brokerinstallationen verteilen.
 
 Nicht in den Kern gehören fachliche DTOs, Business-Workflows, vollständige
 Job-Scheduler, langfristige Workflow-/RPC-Ergebnisarchive, Cloud-Provisionierung,
@@ -817,7 +820,7 @@ Admin-UIs, Virenscanner, ZIP-Entpackung, PGP-Keyverwaltung oder eine eigene
 verteilte Dateispeicherplattform. Erweiterungspunkte dürfen diese verbinden,
 ohne den Grundvertrag damit zu belasten. Keine scheinbar universellen
 Transaktionen, Prioritäten oder Exactly-once-Zusagen. Der nun beauftragte
-RPC-Umfang bleibt eine optionale Request/Reply-Erweiterung gemäß § 13. [geändert]
+RPC-Umfang bleibt eine optionale Request/Reply-Erweiterung gemäß § 13.
 
 Globale Lock-/Konsensverfahren gehören nicht in die MQ-Library. § 15 zeigt
 Broadcast und das Einsammeln von Lock-Bestätigungen; die tatsächlichen
@@ -830,13 +833,13 @@ Ack-Verlust, unbekanntes Publish-Ergebnis, lokale DTOs mit anderem Namespace,
 verschachtelte Strukturen/required/null/zusätzliche Felder, manipulierte
 Signaturen samt Metadaten, Rotation, Backlog-Zeitprüfung, fehlgeschlagene
 Dateiprüfung, konkurrierende Consumer und Verbindungsabbrüche. Dieser
-Entwurfs-PR fügt keine Laufzeitimplementierung oder Tests dafür hinzu. [geändert]
+Entwurfs-PR fügt keine Laufzeitimplementierung oder Tests dafür hinzu.
 
 Primärquellen, abgerufen am 2026-09-12:
 
-- §§ 2–5, 7, 10: [RabbitMQ Queues](https://www.rabbitmq.com/docs/queues), [Exchanges](https://www.rabbitmq.com/docs/exchanges), [Confirms](https://www.rabbitmq.com/docs/confirms), [Quorum Queues](https://www.rabbitmq.com/docs/quorum-queues), [Management HTTP API](https://www.rabbitmq.com/docs/http-api-reference). [neu]
+- §§ 2–5, 7, 10: [RabbitMQ Queues](https://www.rabbitmq.com/docs/queues), [Exchanges](https://www.rabbitmq.com/docs/exchanges), [Confirms](https://www.rabbitmq.com/docs/confirms), [Quorum Queues](https://www.rabbitmq.com/docs/quorum-queues), [Management HTTP API](https://www.rabbitmq.com/docs/http-api-reference).
 
-- § 6.1: [phore/schema Hydrator](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/src/Hydrator/Hydrator.php), [Validator](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/src/Validator/Validator.php), [Nutzungsinfo](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/.ai-usage-info.md). [geändert]
+- § 6.1: [phore/schema Hydrator](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/src/Hydrator/Hydrator.php), [Validator](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/src/Validator/Validator.php), [Nutzungsinfo](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/.ai-usage-info.md).
 
 ## § 13 RPC: Command, Rückgabewert und Begleitmeldungen
 
@@ -857,7 +860,7 @@ pro Client unter `replyNamespace` (Demo `_phore.rpc`). Das ist eine ausdrücklic
 aktivierte Ausnahme zur rein vorab angelegten fachlichen Topologie; passende
 Configure-/Read-/Write-Rechte für den reservierten Bereich sind erforderlich,
 auch bei `autoCreate: false`. Der Responder akzeptiert ausschließlich erlaubte
-Reply-Ziele im konfigurierten Namespace; Zugang und Identität werden zusätzlich geprüft. [neu]
+Reply-Ziele im konfigurierten Namespace; Zugang und Identität werden zusätzlich geprüft.
 
 Der interne Reply-Consumer wird vor Publish eingerichtet, einschließlich des
 Korrelationsregisters. Er teilt seine Queue niemals mit anderen Clients.
@@ -868,7 +871,7 @@ Konfigurierbare feste `replyTopic`/`replySubscription` bleiben für einen expliz
 zentralen Demultiplexer möglich; unabhängige Clients dürfen sie nicht gemeinsam
 als konkurrierende Consumer verwenden. Der Server kann `allowedReplyTopics`
 zusätzlich auf konkrete Ziele einschränken. Anzahl, Bytes und Lebensdauer des
-Rückkanals bleiben begrenzt. [neu]
+Rückkanals bleiben begrenzt.
 
 `RequestOptions` ergänzt `timeoutSeconds` (Default 30 Sekunden ab `request`,
 nicht ab `await`), `metadata`, optional `responseClass` und `onNotice`.
@@ -1132,7 +1135,7 @@ Die öffentliche API bleibt klein und erklärt die Wirkung am Aufruf:
 `respond` registrieren Handler, `run` verarbeitet Zustellungen. Ein zentrales
 `PhoreMQ` bündelt Konfiguration und Lebenszyklus. Fachliche DTOs tragen optionale
 Metadaten; Arrays und explizite Topic-/Typ-Angaben bleiben gleichwertig möglich.
-RabbitMQ-spezifische Klassen werden nur bei direkter Adapter-Injektion benötigt. [neu]
+RabbitMQ-spezifische Klassen werden nur bei direkter Adapter-Injektion benötigt.
 
 ### § 14.2 Metadaten außerhalb des fachlichen Payloads
 
@@ -1200,7 +1203,7 @@ ursprünglichen Exception. Keine solchen Laufzeittests in diesem Entwurfs-PR.
 
 Quellen für §§ 13–14, abgerufen am 2026-09-12:
 
-- [RabbitMQ: RPC mit PHP](https://www.rabbitmq.com/tutorials/tutorial-six-php). [neu]
+- [RabbitMQ: RPC mit PHP](https://www.rabbitmq.com/tutorials/tutorial-six-php).
 
 ## § 15 An alle Subscriber oder an einen Worker
 
@@ -1217,7 +1220,7 @@ eine unabhängige Audit-Subscription. „An einen“ bedeutet deshalb nicht
 weltweit exklusiv, falls daneben weitere Subscriptions existieren. Für die
 Processing-Queue provisioniert man bewusst nur die ausführende Worker-Gruppe;
 Audit-Consumer führen den Job nicht aus. Die ersten beiden Muster brauchen
-die RabbitMQ-Bindungen: Jede unabhängige Subscription besitzt ihre eigene Queue. [geändert]
+die RabbitMQ-Bindungen: Jede unabhängige Subscription besitzt ihre eigene Queue.
 
 ### § 15.2 Lock-Koordination: alle bekannten Teilnehmer antworten
 
@@ -1272,13 +1275,13 @@ mehrere Prozesse mit `respond('jobs.text', 'text-processors', ...)`.
 erzeugt getrennte Transport-Consumer-IDs; eine Worker-ID dient im Beispiel
 nur als Antwortmetadatum, nicht als neue Subscription. Der Client ruft
 `request('jobs.text', 'text.process.v1', $params)->await()` auf und erhält
-Payload und die Kennung des verarbeitenden Workers zurück. [geändert]
+Payload und die Kennung des verarbeitenden Workers zurück.
 
 RabbitMQ verteilt an verfügbare Consumer unter Berücksichtigung ihres Prefetch-Limits. „Random“ wird hier als „beliebiger verfügbarer Worker,
 ohne feste Zielinstanz“ verstanden. Gleichmäßiger Zufall, Round-robin oder
 garantierte Fairness sind kein portabler Vertrag; auch mehrere Jobs
 hintereinander beim selben Worker sind zulässig. Wer eine bestimmte
-Verteilungsstrategie benötigt, braucht einen gesonderten Scheduler. [neu]
+Verteilungsstrategie benötigt, braucht einen gesonderten Scheduler.
 
 Pro Zustellversuch wird ein Consumer ausgewählt; ein normaler Job wird
 nicht an alle Worker kopiert. Bei Crash, verlorenem Ack oder Verbindungsabbruch
@@ -1288,7 +1291,7 @@ Worker kann nach Verlust seines Channels sogar noch weiterlaufen, während ein n
 lange Verarbeitung braucht passende Ack-Fristen und Heartbeat-Verarbeitung, kritische Aktionen benötigen
 Idempotenz oder ressourcenseitiges Fencing. Das Beispiel verarbeitet reinen
 Text ohne externe Seiteneffekte; Ergebnis-Publish erfolgt gemäß § 13 vor
-Request-Ack. [geändert]
+Request-Ack.
 
 ### § 15.4 Spätere Prüfungen und Quellen
 
@@ -1296,9 +1299,9 @@ Vorgesehene Contract-Tests: Broadcast an drei Subscriptions versus drei
 Worker einer Gruppe, doppelte Teilnehmerantworten, fehlender/negativer
 Teilnehmer, spätes Acquire nach Release, Koordinator-Crash, veraltete Lease,
 falsche Teilnehmeridentität und erneute Job-Ausführung nach Verbindungsabbruch.
-Diese Tests gehören zur späteren Implementierung, nicht zum Entwurfs-PR. [geändert]
+Diese Tests gehören zur späteren Implementierung, nicht zum Entwurfs-PR.
 
-- [RabbitMQ Consumers: konkurrierende Consumer und Zustellsteuerung](https://www.rabbitmq.com/docs/consumers). [geändert]
+- [RabbitMQ Consumers: konkurrierende Consumer und Zustellsteuerung](https://www.rabbitmq.com/docs/consumers).
 
 Abruf: 2026-09-12; die konkrete API und die Barrierenlogik sind der
 hier vorgeschlagene Anwendungsentwurf.
@@ -1355,7 +1358,7 @@ Exception; `check` untersucht eine bereits erzeugte Connection erneut.
 | Ziel-Topologie | Topic/Subscription/Binding existieren, soweit der Adapter sie prüfen darf | Ohne Prüfmöglichkeit/Rechte unknown, niemals erfundener Erfolg |
 | Consumer-Bereitschaft | Aktuelle Antworten der erwarteten Gruppen/Instanzen, registrierter Handler für Typ, aktive Consume-Bindung und keine blockierende Störung | Consumer-Zähler allein reichen nicht |
 | Anwendungsabhängigkeiten | Benannte Prüfungen melden z. B. Datenbank, Ausgabeverzeichnis oder Fremddienst bereit | Nur tatsächlich geprüfte Abhängigkeiten; Probe muss seiteneffektfrei sein |
-| Betriebsprobleme | Optionale, aktuelle Werte für Rückstau, älteste Nachricht, Pending/Retry/Dead Letter und letzte Fehler | Schwellen konfiguriert; nicht messbare Werte sind null/unknown [geändert] |
+| Betriebsprobleme | Optionale, aktuelle Werte für Rückstau, älteste Nachricht, Pending/Retry/Dead Letter und letzte Fehler | Schwellen konfiguriert; nicht messbare Werte sind null/unknown |
 
 Ein erfolgreicher Health-Roundtrip beweist den Health-Pfad. Er beweist nicht
 automatisch den fachlichen Publish-Pfad, dessen Berechtigungen oder die
@@ -1416,7 +1419,7 @@ Die Runtime fragt für pausierte Ziele keine neuen Jobs ab. Bereits zugestellte
 Nachrichten werden nach der Retry-Policy verzögert freigegeben oder
 begrenzt gehalten, nicht engmaschig konsumiert und erneut veröffentlicht.
 Health-Probes sind davon getrennt. Unterbrechungsschutz, sichere Fehlerablage
-und die bestehenden Retry-Grenzen bleiben wirksam. [geändert]
+und die bestehenden Retry-Grenzen bleiben wirksam.
 
 ### § 16.4 Health-Kanal, Ausfälle und Authentifizierung
 
@@ -1562,7 +1565,7 @@ automatischen Ressourcenänderungen durch einen Check.
 Primärquelle: [RabbitMQ Monitoring](https://www.rabbitmq.com/docs/monitoring)
 für die Unterscheidung von Broker-, Queue- und Anwendungszustand; abgerufen
 am 2026-09-12. Der einheitliche API-/Statusvertrag ist der hier vorgeschlagene
-Entwurf, kein behaupteter branchenweiter Standard. [neu]
+Entwurf, kein behaupteter branchenweiter Standard.
 
 ### § 16.8 Deklarierte Abhängigkeiten und Listenerdiagnose
 
