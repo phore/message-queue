@@ -67,19 +67,36 @@ function demo(string $dsn, string $sharedSecret): void
             'displayName' => 'Optionales neues Feld',
         ]);
 
+        // Run-Optionen (Sekunden sind Laufzeiten, keine Pollingintervalle):
+        // maxMessages: höchstens so viele abgeschlossene fachliche Zustellversuche
+        // in DIESEM run(), über alle registrierten Subscriptions zusammen.
+        // Fan-out an zwei Gruppen zählt zweimal; Redelivery zählt erneut.
+        // Auch behandelte Retry-/Reject-/Validierungsfehler zählen, nicht nur Erfolge.
+        // Interne Health-/RPC-Replies und leere Polls zählen nicht.
+        // maxSeconds: Gesamtbudget ab run()-Start, inklusive Warten und Verarbeitung.
+        // idleTimeoutSeconds: optional; beendet nach so langer zusammenhängender
+        // Wartezeit ohne fachliche Zustellung. Beginnt beim Eintritt ins Warten neu;
+        // Handlerlaufzeit zählt nicht als Leerlauf. Beispiel: run(idleTimeoutSeconds: 2).
+        // Das zuerst erreichte Limit beendet normal: keine Timeout-Exception.
+        // Laufende synchrone Handler werden nicht hart abgebrochen; maxSeconds kann
+        // deshalb überschritten werden. Nach Fristablauf startet kein weiterer Handler.
+        // minMessages gibt es nicht: keine garantierte Mindestzahl erzwingen.
+        // Ohne gesetztes Limit gilt für diese Grenze unbegrenzt; run() läuft bis stop()
+        // oder einem Infrastrukturfehler. Limits müssen positiv sein (kein 0/-1).
+        // Dieselben Felder sind alternativ in RunOptions verfügbar (siehe 05-rpc.php).
         // Zwei unabhängige Subscriptions verarbeiten je dieselbe Nachricht.
-        $mq->run(maxMessages: 2, maxSeconds: 10);
+        $mq->run(maxMessages: 2, maxSeconds: 10); // Höchstens 2 Versuche oder 10 s, ggf. weniger.
 
         // Typobjekt ohne Attribute: publish löst das programmatische Mapping auf.
         $user = new LocalUserCreated();
         $user->userId = 'u-456';
         $user->email = 'other@example.org';
         $mq->publish($user);
-        $mq->run(maxMessages: 2, maxSeconds: 10);
+        $mq->run(maxMessages: 2, maxSeconds: 10); // Höchstens 2 Versuche oder 10 s, ggf. weniger.
 
         // Ohne Contract registrierter Typ: JSON-Daten, keine Schema-Hydration.
         $mq->publish('telemetry', 'heartbeat.v1', ['service' => 'billing']);
-        $mq->run(maxMessages: 1, maxSeconds: 10);
+        $mq->run(maxMessages: 1, maxSeconds: 10); // Höchstens 1 Versuch oder 10 s.
 
         // Aussagekräftiger lokaler Fehler, bevor die Nachricht versendet wird.
         try {

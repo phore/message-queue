@@ -159,6 +159,9 @@ function withAllLocks(string $dsn, string $secret, array $participants, callable
             new PublishOptions(correlationId: $roundId));
         $remaining = $acquireBy - time();
         if ($remaining > 0) {
+            // Nur das verbleibende Zeitbudget dieser Runde; kein neuer voller Timeout.
+            // run kehrt bei Ablauf normal zurück. Ob alle geantwortet haben, prüfen wir
+            // unten selbst; maxSeconds garantiert weder Teilnehmerzahl noch Lock-Erfolg.
             $mq->run(new RunOptions(maxSeconds: $remaining));
         }
 

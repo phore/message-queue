@@ -50,6 +50,8 @@ function zipDemo(string $dsn, string $sharedSecret, string $storeDirectory, stri
                 'archive' => Attachment::fromPath($zipPath, contentType: 'application/zip'),
             ],
         ));
+        // Höchstens 1 Zustellversuch(e) insgesamt oder 30 s Gesamtbudget; erstes Limit gewinnt.
+        // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
         $mq->run(new RunOptions(maxMessages: 1, maxSeconds: 30));
     } finally {
         $mq->close();
@@ -71,6 +73,8 @@ function inMemoryDemo(): void
             printf("Memory: %s\n", $data['userId']);
         }, new SubscriptionOptions(durability: Durability::Volatile));
         $sender->publish('users', 'user.created.v1', ['userId' => 'local-1']);
+        // Höchstens 1 Zustellversuch(e) insgesamt oder 1 s Gesamtbudget; erstes Limit gewinnt.
+        // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
         $receiver->run(new RunOptions(maxMessages: 1, maxSeconds: 1));
     } finally {
         $sender->close();
@@ -105,6 +109,8 @@ function unixClientDemo(string $socketDsn): void
             printf("Unix: %s\n", $data['value']);
         }, new SubscriptionOptions(durability: Durability::Volatile));
         $mq->publish('local', 'ping.v1', ['value' => 'hello']);
+        // Höchstens 1 Zustellversuch(e) insgesamt oder 5 s Gesamtbudget; erstes Limit gewinnt.
+        // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
         $mq->run(new RunOptions(maxMessages: 1, maxSeconds: 5));
     } finally {
         $mq->close();

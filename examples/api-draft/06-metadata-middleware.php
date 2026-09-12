@@ -100,6 +100,8 @@ function demo(string $dsn, string $secret, string $traceId): void
                 correlationId: 'request-42',
                 metadata: ['app.locale' => 'de-DE'],
             ));
+            // Höchstens 1 Zustellversuch(e) insgesamt oder 5 s Gesamtbudget; erstes Limit gewinnt.
+            // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
             $mq->run(new RunOptions(maxMessages: 1, maxSeconds: 5));
 
             // Eine Warning direkt als gewöhnliches Event versenden: keine neue API nötig.
@@ -111,6 +113,8 @@ function demo(string $dsn, string $secret, string $traceId): void
                 correlationId: 'request-42',
                 metadata: ['app.traceId' => $traceId],
             ));
+            // Höchstens 1 Zustellversuch(e) insgesamt oder 5 s Gesamtbudget; erstes Limit gewinnt.
+            // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
             $diagnostics->run(new RunOptions(maxMessages: 1, maxSeconds: 5));
 
             // Für den Fehlerpfad oben: payload ['orderId' => 'order-43', 'mode' => 'reject'].

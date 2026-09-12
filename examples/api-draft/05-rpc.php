@@ -100,6 +100,11 @@ function runServer(string $dsn, string $secret): void
 
         // Gleichwertige Alternative mit Attributen, NICHT zusätzlich registrieren:
         // $mq->registerHandlers(new DivideHandler());
+        // maxMessages: maximal 100 Zustellversuche insgesamt, nicht je Subscription.
+        // maxSeconds: bis zu 60 s Gesamtbudget inklusive Leerlauf; erstes Limit gewinnt.
+        // Ein laufender synchroner Handler darf noch fertig werden, ggf. über die 60 s.
+        // Erreichen dieser Grenzen ist normale Rückkehr, keine Timeout-Exception.
+        // minMessages ist nicht vorgesehen; weniger als 100 Versuche sind zulässig.
         $mq->run(maxMessages: 100, maxSeconds: 60);
         // Alternativen: run(new RunOptions(maxMessages: 100, maxSeconds: 60))
         // oder run(new RunOptions(maxSeconds: 60), maxMessages: 100).
@@ -116,6 +121,11 @@ function runClient(string $dsn, string $secret): void
         // Publish erkennt das DTO und übernimmt Topic/Typ. Sendet sofort.
         $sent = $mq->publish(new Divide(12, 3));
         // Andere lokale Arbeit wäre hier möglich; der Broker hat die Nachricht bereits.
+        // timeoutSeconds: maximal 5 s LOKALES Warten ab diesem await-Aufruf,
+        // begrenzt durch die verbleibende, schon beim Publish gesetzte Antwortfrist.
+        // Bereits vorhandene finale Antwort: sofortige Rückgabe ohne neue Sendung.
+        // Kein finales Result/Error bis dahin: RequestTimeoutException (catch unten),
+        // niemals null/false oder ein leeres scheinbar erfolgreiches Reply.
         $reply = $sent->await(timeoutSeconds: 5);
         printf("Ergebnis: %s\n", $reply->payload['quotient']); // 4
 
@@ -134,13 +144,17 @@ function runClient(string $dsn, string $secret): void
         ));
         $reply = $pending->await(new AwaitOptions(timeoutSeconds: 10),
             timeoutSeconds: 5, // Direkter Wert überschreibt hier die 10 Sekunden.
+            // onNotice: Zwischenmeldungen ausgeben; sie beenden await nicht und
+            // setzen weder die lokale Wartefrist noch die Remote-Deadline zurück.
             onNotice: static function (Notice $notice): void {
                 printf("%s [%s]: %s\n", $notice->level, $notice->code, $notice->message);
             },
         );
         printf("Ergebnis: %s, Worker: %s\n", $reply->payload['quotient'], $reply->metadata['app.worker']);
         // reply->notices enthält die finale Zusammenfassung; nicht doppelt ausgeben.
-        // Optional await(responseClass: LocalResult::class), mit Schema-Bridge auf der Connection.
+        // responseClass: lokale DTO-Klasse für reply->payload; vor Rückgabe strukturell
+        // prüfen/hydrieren. Ohne Angabe Array; benötigt bei DTOs die Schema-Bridge.
+        // Beispiel: await(responseClass: LocalResult::class).
         // Reine Events können mit PublishOptions(reply: false) ohne Antwortaufwand senden.
 
         try {
@@ -150,7 +164,13 @@ function runClient(string $dsn, string $secret): void
             // Erwartet: DIVIDE_BY_ZERO; keine entfernten PHP-Stacks/Objekte.
         }
     } catch (RequestTimeoutException $timeout) {
+        // await wirft RequestTimeoutException bei abgelaufener lokaler Wartefrist
+        // oder ursprünglicher Antwortdeadline ohne rechtzeitig empfangenes finales Ergebnis.
+        // Der Fehler enthält requestId. Er ist kein RemoteCommandException:
+        // ein bekannter fachlicher Fehler des Responders ist eine andere Ursache.
         // Ein Timeout stoppt das entfernte Command NICHT und sendet es nicht erneut.
+        // Falls die ursprüngliche Antwortfrist noch läuft, kann derselbe SendResult
+        // erneut await() aufrufen. Nicht publish() wiederholen: das wäre ein neuer Job.
         printf("Keine rechtzeitige Antwort für Request %s\n", $timeout->requestId);
     } finally {
         $mq->close();

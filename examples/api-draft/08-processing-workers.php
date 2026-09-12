@@ -73,10 +73,15 @@ function submitJobs(string $dsn, string $secret): void
         foreach (['  erster Job  ', '  zweiter Job  ', '  dritter Job  '] as $text) {
             // Keine Worker-Adresse: der Broker wählt einen verfügbaren Consumer.
             $pending[] = $mq->request('jobs.text', 'text.process.v1', ['text' => $text],
+                // Ursprüngliche Antwortfrist: 15 s ab request(), nicht ab await().
                 new RequestOptions(timeoutSeconds: 15));
         }
 
         foreach ($pending as $call) {
+            // Ohne lokalen Timeout wartet await nur bis zur ursprünglichen Deadline.
+            // Die Fristen laufen seit dem Senden PARALLEL, nicht je weitere 15 s pro await.
+            // Ohne rechtzeitiges finales Ergebnis: RequestTimeoutException (catch in 05).
+            // Kein erneutes Senden, kein Abbruch des entfernten Workers durch den Timeout.
             $reply = $call->await(); // Dispatcher ordnet auch frühere Antworten korrekt zu.
             printf("%s: %s (%d Bytes), SHA-256 %s\n",
                 $reply->metadata['app.workerId'],

@@ -83,6 +83,8 @@ function demo(string $dsn, string $sharedSecret): void
         // Attributvariante: Resolver liest Methodensignatur und DTO-Metadaten.
         $mq->registerHandlers(new UserHandlers());
         send($mq);
+        // Höchstens 4 Zustellversuch(e) insgesamt oder 10 s Gesamtbudget; erstes Limit gewinnt.
+        // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
         $mq->run(maxMessages: 4, maxSeconds: 10);
     } finally {
         $mq->close();
@@ -105,6 +107,8 @@ function demoCallback(string $dsn, string $sharedSecret): void
         }); // users + sdk-users + user.created.v1; automatische Hydration.
         send($mq);
         // Empfangsschleife für registrierte Handler, kein verzögertes publish.
+        // Höchstens 2 Zustellversuch(e) insgesamt oder 10 s Gesamtbudget; erstes Limit gewinnt.
+        // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
         $mq->run(maxMessages: 2, maxSeconds: 10);
     } finally {
         $mq->close();
@@ -150,6 +154,8 @@ function demoMultipleTopics(string $dsn, string $sharedSecret): void
         $mq->publish('audit.users', 'audit.entry.v1', $entry);
         $mq->publish('audit.billing', 'audit.entry.v1', $entry);
         // publish($entry) wäre MAPPING_INCOMPLETE: kein festes Topic auf diesem DTO.
+        // Höchstens 2 Zustellversuch(e) insgesamt oder 10 s Gesamtbudget; erstes Limit gewinnt.
+        // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
         $mq->run(maxMessages: 2, maxSeconds: 10);
     } finally {
         $mq->close();
