@@ -1,0 +1,8 @@
+# NUR zusammen mit compose.internal.yaml verwenden; HOWTO.md zeigt den Start.
+# Der Mount ersetzt anhand desselben Container-Zielpfads die Basis-Konfiguration.
+services:
+  rabbitmq:
+    volumes:
+      - ./anonymous.conf:/etc/rabbitmq/conf.d/90-app.conf:ro
+    # Kein Benutzer/Passwort im AMQP-Client erforderlich: SASL ANONYMOUS wählen.
+    # Der Broker behält die interne Identität aus der Basis-Compose.

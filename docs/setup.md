@@ -253,3 +253,5 @@ die zentrale Connection muss dann `amqp://demo:demo@rabbitmq:5672/demo` und
 managementUrl `http://rabbitmq:15672` enthalten. Der lokale setup.php-Aufruf läuft
 weiter auf dem Host mit seiner Host-Konfiguration. Es werden nur zwei einzelne
 Ports veröffentlicht, keine Port-Range: 5672 für AMQP und 15672 für Management.
+
+[Internes Docker-Deployment ohne Management-Plugin, optional SASL ANONYMOUS](../deployment/rabbitmq/HOWTO.md): Compose-Netzwerk und Datenvolume werden automatisch angelegt; das How-to erklärt vHost, Ports und die noch fehlende Kompatibilität mit der vollständigen PhoreMQ-Topologieprüfung.
