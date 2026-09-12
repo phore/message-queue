@@ -15,16 +15,15 @@ use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\Middleware\OutgoingMessage;
 use Phore\MessageQueue\PublishOptions;
 use Phore\MessageQueue\PublishReceipt;
-use Phore\MessageQueue\RunOptions;
 use Phore\MessageQueue\SubscriptionOptions;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal § 14.
  * Zwei optionale Callable-Hooks, keine Middleware-Basisklasse erforderlich.
- * Beispielaufruf: demo($traceId), mit frischem Demo-Namespace.
+ * Beispielaufruf: processOrderWithDiagnostics($traceId), mit frischem Demo-Namespace.
  */
 
-function demo(string $traceId): void
+function processOrderWithDiagnostics(string $traceId): void
 {
     // Separate Connection ohne Diagnose-Middleware verhindert Fehlerschleifen.
     $diagnostics = new PhoreMQ(...demoConnection());
@@ -52,6 +51,7 @@ function demo(string $traceId): void
                                 'code' => 'HANDLER_FAILED',
                                 'message' => 'Eine Nachricht konnte nicht verarbeitet werden.',
                             ], new PublishOptions(
+                                reply: false,
                                 correlationId: $context->correlationId ?? $context->messageId,
                                 metadata: [
                                     'app.traceId' => $context->metadata['app.traceId'] ?? 'unknown',
@@ -88,12 +88,13 @@ function demo(string $traceId): void
 
             // Einfacher Event-Aufruf mit frei gewählten, begrenzten Anwendungsmetadaten.
             $mq->publish('orders', 'order.submit.v1', ['orderId' => 'order-42'], new PublishOptions(
+                reply: false,
                 correlationId: 'request-42',
                 metadata: ['app.locale' => 'de-DE'],
             ));
-            // Höchstens 1 Zustellversuch(e) insgesamt oder 5 s Gesamtbudget; erstes Limit gewinnt.
+            // Höchstens 1 Zustellversuche insgesamt oder 5 s Gesamtbudget; erstes Limit gewinnt.
             // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
-            $mq->run(new RunOptions(maxMessages: 1, maxSeconds: 5));
+            $mq->run(maxMessages: 1, maxSeconds: 5);
 
             // Eine Warning direkt als gewöhnliches Event versenden: keine neue API nötig.
             $diagnostics->publish('diagnostics', 'diagnostic.v1', [
@@ -101,15 +102,19 @@ function demo(string $traceId): void
                 'code' => 'OPTIONAL_DATA_MISSING',
                 'message' => 'Optionale Auftragsdaten fehlen.',
             ], new PublishOptions(
+                reply: false,
                 correlationId: 'request-42',
                 metadata: ['app.traceId' => $traceId],
             ));
-            // Höchstens 1 Zustellversuch(e) insgesamt oder 5 s Gesamtbudget; erstes Limit gewinnt.
+            // Höchstens 1 Zustellversuche insgesamt oder 5 s Gesamtbudget; erstes Limit gewinnt.
             // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
-            $diagnostics->run(new RunOptions(maxMessages: 1, maxSeconds: 5));
+            $diagnostics->run(maxMessages: 1, maxSeconds: 5);
 
-            // Für den Fehlerpfad oben: payload ['orderId' => 'order-43', 'mode' => 'reject'].
-            // Der Handlerfehler bleibt erhalten; die Middleware sendet separat level=error.
+            // Zweite Aktion: permanenter Fehler, Middleware veröffentlicht Diagnose.
+            $mq->publish('orders', 'order.submit.v1', ['orderId' => 'order-43', 'mode' => 'reject'], options: new PublishOptions(reply: false));
+            $mq->run(maxMessages: 1, maxSeconds: 5); // Reject wird sicher abgelegt.
+            $diagnostics->run(maxMessages: 1, maxSeconds: 5); // Diagnose tatsächlich anzeigen.
+            // run wirft hier nicht den Reject: die Runtime hat ihn bereits behandelt.
             // RPC-Begleitmeldungen am Rückkanal zeigt zusätzlich Beispiel 05.
         } finally {
             $mq->close();

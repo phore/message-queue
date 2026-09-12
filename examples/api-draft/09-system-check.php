@@ -105,11 +105,9 @@ function frontendConnection(string $instanceId): MessageQueueInterface
 
 function checkAtLogin(MessageQueueInterface $mq): array
 {
-    $connection = $mq->check(); // Ausschließlich Broker/lokale Konfiguration.
-    // Alle deklarierten Anforderungen in EINEM begrenzten Check, pro Ziel mit Listenerliste.
-    $system = $mq->check(options: new CheckOptions(requireDeclared: true, timeoutSeconds: 3));
-    // Alternativ nur die Exportfunktion; Anforderungen werden aus Konfiguration übernommen:
-    $export = $mq->check('jobs.export', 'export.create.v1')->toArray();
+    // Eine Netzwerkprüfung für genau die Funktion, die der Browser anbieten soll.
+    $export = $mq->check('jobs.export', 'export.create.v1',
+        new CheckOptions(timeoutSeconds: 3))->toArray();
 
     // Beispiel: Nur erlaubte Felder zum Browser. Interne Host-/Prozessdaten bleiben im Backend.
     return ['features' => ['export' => [
@@ -120,11 +118,17 @@ function checkAtLogin(MessageQueueInterface $mq): array
             'code' => $issue['code'], 'message' => $issue['publicMessage'],
         ], $export['issues']),
     ]]];
-    // $system->toArray()['targets'] enthält zusätzlich jedes benötigte Topic/Typ-Paar.
-    // Jeder Zielbericht enthält consumers samt readiness, issues und optional diagnostics.
-    // Im echten Loginpfad einen passenden Check wählen; alle drei dienen hier dem API-Vergleich.
 }
 
+// Alternative für Betreiber: alle deklarierten Abhängigkeiten in einem Check.
+// Dieses Ergebnis enthält interne Diagnosefelder, nicht ungefiltert zum Browser geben.
+function checkAllDependencies(MessageQueueInterface $mq): array
+{
+    return $mq->check(options: new CheckOptions(requireDeclared: true, timeoutSeconds: 3))->toArray();
+}
+
+// Nur Brokerverbindung prüfen: $mq->check(); das sagt nichts über Export-Worker aus.
+// Die injizierte Connection bleibt Eigentum des Aufrufers; diese Funktionen schließen sie nicht.
 function observeStatus(MessageQueueInterface $monitor, callable $acceptVerifiedSnapshot): void
 {
     $monitor->subscribe('_phore.health.status', 'operations-dashboard',

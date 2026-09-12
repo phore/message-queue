@@ -39,7 +39,7 @@ final class TextHandler
         if ($command->text === '') {
             // Permanent: Eingabe korrigieren. Keine Retry-Runde.
             // Client-await wirft RemoteCommandException mit dieser sicheren Meldung.
-            throw new CommandFailedException('EMPTY_TEXT', 'Der Text darf nicht leer sein.');
+            throw new CommandFailedException(errorCode: 'EMPTY_TEXT', publicMessage: 'Der Text darf nicht leer sein.');
         }
         return ['text' => trim($command->text)];
     }
@@ -63,9 +63,13 @@ function runProgrammaticWorker(): void
     $mq = new PhoreMQ(...demoConnection());
     try {
         // Alternative zum typisierten Worker, identischer gemeinsamer Queue-Contract.
+        // Fehlender/falscher text-Typ würde dort bereits bei der Hydration scheitern.
         $mq->respond('text', 'text-workers', static function (array $command): array {
-            if (!is_string($command['text'] ?? null) || $command['text'] === '') {
-                throw new CommandFailedException('EMPTY_TEXT', 'Ein nicht leerer Text wird benötigt.');
+            if (!is_string($command['text'] ?? null)) {
+                throw new CommandFailedException(errorCode: 'INVALID_ARGUMENT', publicMessage: 'text muss ein String sein.');
+            }
+            if ($command['text'] === '') {
+                throw new CommandFailedException(errorCode: 'EMPTY_TEXT', publicMessage: 'Der Text darf nicht leer sein.');
             }
             return ['text' => trim($command['text'])];
         }, new SubscriptionOptions(type: 'text.normalize.v1', queue: QueueOptions::rpc(
@@ -90,7 +94,7 @@ function runProgrammaticWorker(): void
     }
 }
 
-function runEvents(): void
+function runLiveScreen(): void
 {
     $mq = new PhoreMQ(...demoConnection());
     try {
@@ -99,9 +103,7 @@ function runEvents(): void
         }, new SubscriptionOptions(queue: QueueOptions::broadcast()));
         // Jede registrierte Connection bekommt eine eigene flüchtige Kopie.
         // Keine Offline-Aufbewahrung, keine Handler-Retries; nicht für Pflicht-Jobs.
-        // retentionSeconds: 300 würde eine dauerhafte Subscription mit maximal
-        // 5 Minuten Wartezeit erzeugen. Dafür jeder Empfängergruppe eigenen Namen
-        // geben; gleiche Namen teilen dann Arbeit. Kein Replay für neue Gruppen.
+        // Dauerhafte Gruppe mit Offline-Puffer: runRetainedScreen() unten.
         $mq->run();
     } finally {
         $mq->close();
@@ -125,6 +127,21 @@ function runWithDefaults(): void
         $mq->run(maxMessages: 4, maxSeconds: 60);
         // Höchstens vier Zustellversuche oder 60 s Gesamtbudget, normale Rückkehr.
         // Keine Mindestanzahl; spontane Redeliveries können dasselbe attempt wiederholen.
+    } finally {
+        $mq->close();
+    }
+}
+
+// Separate Alternative mit stabilem Namen: erst provisionieren, dann Events senden.
+// Ein Profilwechsel für eine bestehende Subscription ist keine automatische Migration.
+function runRetainedScreen(): void
+{
+    $mq = new PhoreMQ(...demoConnection());
+    try {
+        $mq->subscribe('live', 'screen-history', static function (array $event): void {
+            echo $event['text'];
+        }, new SubscriptionOptions(queue: QueueOptions::broadcast(retentionSeconds: 300)));
+        $mq->run(); // Max. 5 min wartende Nachrichten; Ack entfernt die eigene Kopie früher.
     } finally {
         $mq->close();
     }

@@ -13,6 +13,7 @@ use Phore\MessageQueue\Attribute\Subscribe;
 use Phore\MessageQueue\Attribute\Queue;
 use Phore\MessageQueue\QueueProfile;
 use Phore\MessageQueue\PhoreMQ;
+use Phore\MessageQueue\PublishOptions;
 use Phore\MessageQueue\SubscriptionOptions;
 use Phore\MessageQueue\Exception\MessageMappingException;
 use Phore\MessageQueue\Exception\InvalidHandlerException;
@@ -53,54 +54,51 @@ final class UserHandlers
     }
 }
 
-function send(MessageQueueInterface $mq): void
+function publishUserCreated(MessageQueueInterface $mq): void
 {
     $user = new T_UserCreated();
     $user->userId = 'u-789';
     $user->email = 'sdk-user@example.org';
 
-    $mq->publish($user); // Liest MessageType, validiert und serialisiert.
+    $mq->publish($user, options: new PublishOptions(reply: false)); // Liest MessageType, validiert und serialisiert.
 
-    // Gleichwertige explizite API, etwa für eine andere Anwendung ohne SDK:
+}
+
+// Separate Alternative: exakt ein Event, ohne SDK-Objekt.
+function publishUserCreatedAsArray(MessageQueueInterface $mq): void
+{
     $mq->publish('users', 'user.created.v1', [
         'userId' => 'u-790',
         'email' => 'manual@example.org',
-    ]);
+    ], options: new PublishOptions(reply: false));
 }
 
-function demo(): void
+function runAttributeWorker(): void
 {
     $mq = new PhoreMQ(...demoConnection());
     try {
         // Attributvariante: Resolver liest Methodensignatur und DTO-Metadaten.
         $mq->registerHandlers(new UserHandlers());
-        send($mq);
-        // Höchstens 4 Zustellversuch(e) insgesamt oder 10 s Gesamtbudget; erstes Limit gewinnt.
-        // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
-        $mq->run(maxMessages: 4, maxSeconds: 10);
+        $mq->run(); // Erst hier werden die registrierten Handler aufgerufen.
     } finally {
         $mq->close();
     }
 }
 
 // Getrennte Prozesse: Empfänger legt/bindet Subscriptions vor dem ersten Senden
-// an und ruft run() auf. Sender ruft danach send() auf seiner eigenen Connection
+// an und ruft run() auf. Sender ruft danach publishUserCreated() auf seiner eigenen Connection
 // auf. Beide verwenden denselben RabbitMQ-Namespace (Vorgaben in 01-connect.php).
 
 // Alternative zur Attributregistrierung: nur den Callback übergeben.
-// Auf einer eigenen MQ-Instanz statt demo()/registerHandlers() ausführen.
-function demoCallback(): void
+// Auf einer eigenen MQ-Instanz statt runAttributeWorker()/registerHandlers() ausführen.
+function runCallbackWorker(): void
 {
     $mq = new PhoreMQ(...demoConnection());
     try {
         $mq->subscribe(function (T_UserCreated $user, MessageContext $context): void {
             printf("Callback: %s / %s\n", $context->messageId, $user->email);
         }); // users + sdk-users + user.created.v1; automatische Hydration.
-        send($mq);
-        // Empfangsschleife für registrierte Handler, kein verzögertes publish.
-        // Höchstens 2 Zustellversuch(e) insgesamt oder 10 s Gesamtbudget; erstes Limit gewinnt.
-        // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
-        $mq->run(maxMessages: 2, maxSeconds: 10);
+        $mq->run(); // Alternative zum Attribut-Worker, gleicher Empfangsvertrag.
     } finally {
         $mq->close();
     }
@@ -142,10 +140,10 @@ function demoMultipleTopics(): void
         // Die Alternative ersetzt dessen obige Registrierung, nicht zusätzlich aufrufen.
         $entry = new T_AuditEntry();
         $entry->text = 'Ein Vorgang wurde abgeschlossen.';
-        $mq->publish('audit.users', 'audit.entry.v1', $entry);
-        $mq->publish('audit.billing', 'audit.entry.v1', $entry);
+        $mq->publish('audit.users', 'audit.entry.v1', $entry, options: new PublishOptions(reply: false));
+        $mq->publish('audit.billing', 'audit.entry.v1', $entry, options: new PublishOptions(reply: false));
         // publish($entry) wäre MAPPING_INCOMPLETE: kein festes Topic auf diesem DTO.
-        // Höchstens 2 Zustellversuch(e) insgesamt oder 10 s Gesamtbudget; erstes Limit gewinnt.
+        // Höchstens 2 Zustellversuche insgesamt oder 10 s Gesamtbudget; erstes Limit gewinnt.
         // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
         $mq->run(maxMessages: 2, maxSeconds: 10);
     } finally {
@@ -160,6 +158,7 @@ function demonstrateConflicts(MessageQueueInterface $mq): void
     try {
         $mq->subscribe($typed, options: new SubscriptionOptions(topic: 'other.users'));
     } catch (MessageMappingException $error) {
+        printf("Mappingkonflikt: %s\n", $error->getMessage());
         // MAPPING_CONFLICT: field=topic, MessageType=users, options=other.users.
         // Ablehnung vor Broker-Binding; kein stilles Überschreiben.
     }
@@ -167,6 +166,7 @@ function demonstrateConflicts(MessageQueueInterface $mq): void
     try {
         $mq->subscribe(static function (T_AuditEntry $entry): void {});
     } catch (MessageMappingException $error) {
+        printf("Mapping unvollständig: %s\n", $error->getMessage());
         // MAPPING_INCOMPLETE: missingFields=[topic, subscription].
     }
 
@@ -175,10 +175,11 @@ function demonstrateConflicts(MessageQueueInterface $mq): void
         try {
             $mq->subscribe($typed);
         } catch (InvalidHandlerException $error) {
+            printf("Doppelte Registrierung: %s\n", $error->getMessage());
             // DUPLICATE_SUBSCRIPTION: users/sdk-users bereits lokal registriert.
             // Derselbe Gruppenname in einem anderen Workerprozess ist dagegen erlaubt.
         }
     } finally {
-        $subscription->cancel(); // Lokales Binding lösen; dauerhafte Gruppe bleibt bestehen.
+        $subscription->cancel(); // Lokalen Consumer abmelden; Broker-Binding und dauerhafte Queue bleiben.
     }
 }

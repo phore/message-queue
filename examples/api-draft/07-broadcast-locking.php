@@ -12,14 +12,13 @@ use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\Exception\RejectMessageException;
 use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\PublishOptions;
-use Phore\MessageQueue\RunOptions;
 use Phore\MessageQueue\SubscriptionOptions;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal § 15.2.
- * Zuerst zwei Prozesse mit runParticipant(..., 'service-a', $localLocksA)
- * und runParticipant(..., 'service-b', $localLocksB) starten/provisionieren.
- * Danach EINEN Koordinator mit withAllLocks(..., ['service-a', 'service-b'], $work).
+ * Zuerst zwei Prozesse mit runParticipant('service-a', $localLocksA)
+ * und runParticipant('service-b', $localLocksB) starten/provisionieren.
+ * Danach EINEN Koordinator mit withAllLocks(['service-a', 'service-b'], $work).
  * Jede Instanz, die antworten soll, braucht eine eigene Subscription/Teilnehmer-ID.
  * Kooperative Entwicklungsakteure: Produktions-Identitätsprüfung siehe Proposal.
  */
@@ -76,7 +75,7 @@ function runParticipant(string $participantId, LocalLeaseManager $locks): void
                     'participant' => $participantId,
                     'held' => $held,
                     'leaseUntil' => $command['leaseUntil'],
-                ], new PublishOptions(correlationId: $command['roundId']));
+                ], new PublishOptions(reply: false, correlationId: $command['roundId']));
                 // Erst erfolgreiche Rückkehr bestätigt Acquire; bei Retry bleibt
                 // tryAcquire mit derselben Runde idempotent.
             });
@@ -139,19 +138,19 @@ function withAllLocks(array $participants, callable $criticalSection): void
                     $rejected = true;
                 }
                 if ($rejected || count($states) === count($participants)) {
-                    $mq->stop();
+                    $mq->stop(); // Beendet den Loop NACH diesem Handler; Ack folgt noch.
                 }
             }, new SubscriptionOptions(type: 'lock.state.v1'));
 
         // EIN Publish erreicht ALLE benannten Teilnehmer-Subscriptions.
         $mq->publish('maintenance.locks', 'lock.acquire.v1', $command,
-            new PublishOptions(correlationId: $roundId));
+            new PublishOptions(reply: false, correlationId: $roundId));
         $remaining = $acquireBy - time();
         if ($remaining > 0) {
             // Nur das verbleibende Zeitbudget dieser Runde; kein neuer voller Timeout.
             // run kehrt bei Ablauf normal zurück. Ob alle geantwortet haben, prüfen wir
             // unten selbst; maxSeconds garantiert weder Teilnehmerzahl noch Lock-Erfolg.
-            $mq->run(new RunOptions(maxSeconds: $remaining));
+            $mq->run(maxSeconds: $remaining);
         }
 
         if ($rejected || count($states) !== count($participants)
@@ -166,7 +165,7 @@ function withAllLocks(array $participants, callable $criticalSection): void
         try {
             // Auch bei negativer Antwort/Timeout teilweise erworbene Locks freigeben.
             $mq->publish('maintenance.locks', 'lock.release.v1', $command,
-                new PublishOptions(correlationId: $roundId));
+                new PublishOptions(reply: false, correlationId: $roundId));
         } catch (\Throwable) {
             // Keine falsche Freigabegarantie: Leases müssen unabhängig ablaufen.
             error_log('Lock-Release nicht bestätigt; automatische Lease-Abläufe bleiben erforderlich.');

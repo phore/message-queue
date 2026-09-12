@@ -7,122 +7,116 @@ namespace Examples\MessageQueue\Programmatic;
 require_once __DIR__ . '/connection.php';
 
 use function Examples\MessageQueue\demoConnection;
-
 use Phore\MessageQueue\PhoreMQ;
+use Phore\MessageQueue\PublishOptions;
 use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\Exception\MessageValidationException;
 use Phore\MessageQueue\Exception\QueueConfigurationMissingException;
 use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\MessageRegistry;
+use Phore\MessageQueue\MessageQueueInterface;
 use Phore\MessageQueue\SubscriptionOptions;
+use Phore\MessageQueue\RunOptions;
 
-/**
- * API-ENTWURF, noch nicht ausführbar. Proposal §§ 5–6 und 11.
- * Beispielaufruf nach Implementierung: demo().
- * Dafür ein frischen Demo-Namespace verwenden: zwei neue Subscriptions werden
- * vor dem Publish gebunden. Bei wiederverwendetem Namespace kann Backlog anliegen.
- */
-
-// Beliebige eigene Klasse: kein gemeinsames SDK und keine Attribute notwendig.
+// API-ENTWURF, PHP >=8.5; keine ausführbare MQ-Library. Proposal §§ 5–6, 11.
+// Anwendung: zuerst runUserWorker() als Worker starten; danach publishUserCreated()
+// im HTTP-Backend. Beide verwenden dieselbe zentrale Verbindungskonfiguration.
 final class LocalUserCreated
 {
     public string $userId;
     public string $email;
 }
 
-function demo(): void
+function runUserWorker(): void
 {
     $registry = new MessageRegistry();
     $registry->register('user.created.v1', LocalUserCreated::class, topic: 'users');
-
     $mq = new PhoreMQ(...demoConnection(new ConnectionOptions(registry: $registry)));
-    // Nur das hier gezeigte Klassenmapping ergänzen; Verbindung siehe 01-connect.php.
-
     try {
-        // Array: für diesen Typ validiert der registrierte Contract die Struktur.
-        $mq->subscribe('users', 'audit-users', function (array $data, MessageContext $context): void {
-            printf("Audit: %s / %s\n", $context->messageId, $data['userId']);
+        $mq->subscribe('users', 'audit-users', static function (array $event, MessageContext $context): void {
+            printf("Audit: %s / %s\n", $context->messageId, $event['userId']);
         }, new SubscriptionOptions(type: 'user.created.v1'));
 
-        // Eigene lokale DTO-Klasse: Reflection erkennt den ersten Parameter.
-        // Sender darf andere Klasse/anderen Namespace oder ein Array verwenden.
-        $mq->subscribe('users', 'billing-users', function (LocalUserCreated $user): void {
-            printf("Billing: %s / %s\n", $user->userId, $user->email);
+        $mq->subscribe('users', 'billing-users', static function (LocalUserCreated $event): void {
+            printf("Billing: %s / %s\n", $event->userId, $event->email);
         }, new SubscriptionOptions(type: 'user.created.v1'));
-
-        // Weiteres Topic im selben Worker, völlig ohne Schema/DTO-Zuordnung.
-        $mq->subscribe('telemetry', 'audit-telemetry', function (array $data): void {
-            printf("Telemetry: %s\n", json_encode($data, JSON_THROW_ON_ERROR));
-        });
-
-        // Manuelles Topic und fachlicher Typ; zusätzlicher Schlüssel ist kompatibel.
-        $mq->publish('users', 'user.created.v1', [
-            'userId' => 'u-123',
-            'email' => 'user@example.org',
-            'displayName' => 'Optionales neues Feld',
-        ]);
-
-        // Run-Optionen (Sekunden sind Laufzeiten, keine Pollingintervalle):
-        // maxMessages: höchstens so viele abgeschlossene fachliche Zustellversuche
-        // in DIESEM run(), über alle registrierten Subscriptions zusammen.
-        // Fan-out an zwei Gruppen zählt zweimal; Redelivery zählt erneut.
-        // Auch behandelte Retry-/Reject-/Validierungsfehler zählen, nicht nur Erfolge.
-        // Interne Health-/RPC-Replies und leere Polls zählen nicht.
-        // maxSeconds: Gesamtbudget ab run()-Start, inklusive Warten und Verarbeitung.
-        // idleTimeoutSeconds: optional; beendet nach so langer zusammenhängender
-        // Wartezeit ohne fachliche Zustellung. Beginnt beim Eintritt ins Warten neu;
-        // Handlerlaufzeit zählt nicht als Leerlauf. Beispiel: run(idleTimeoutSeconds: 2).
-        // Das zuerst erreichte Limit beendet normal: keine Timeout-Exception.
-        // Laufende synchrone Handler werden nicht hart abgebrochen; maxSeconds kann
-        // deshalb überschritten werden. Nach Fristablauf startet kein weiterer Handler.
-        // minMessages gibt es nicht: keine garantierte Mindestzahl erzwingen.
-        // Ohne gesetztes Limit gilt für diese Grenze unbegrenzt; run() läuft bis stop()
-        // oder einem Infrastrukturfehler. Limits müssen positiv sein (kein 0/-1).
-        // Dieselben Felder sind alternativ in RunOptions verfügbar (siehe 05-rpc.php).
-        // Zwei unabhängige Subscriptions verarbeiten je dieselbe Nachricht.
-        $mq->run(maxMessages: 2, maxSeconds: 10); // Höchstens 2 Versuche oder 10 s, ggf. weniger.
-
-        // Typobjekt ohne Attribute: publish löst das programmatische Mapping auf.
-        $user = new LocalUserCreated();
-        $user->userId = 'u-456';
-        $user->email = 'other@example.org';
-        $mq->publish($user);
-        $mq->run(maxMessages: 2, maxSeconds: 10); // Höchstens 2 Versuche oder 10 s, ggf. weniger.
-
-        // Ohne Contract registrierter Typ: JSON-Daten, keine Schema-Hydration.
-        $mq->publish('telemetry', 'heartbeat.v1', ['service' => 'billing']);
-        $mq->run(maxMessages: 1, maxSeconds: 10); // Höchstens 1 Versuch oder 10 s.
-
-        // Aussagekräftiger lokaler Fehler, bevor die Nachricht versendet wird.
-        try {
-            $mq->publish('users', 'user.created.v1', ['userId' => 'missing-email']);
-        } catch (MessageValidationException $exception) {
-            // Erwartet: user.created.v1: $.email: required property is missing
-            printf("Ungültige Nachricht: %s\n", $exception->getMessage());
-        }
+        // Beide Gruppen erhalten eine Kopie. DTO-Hydration nutzt den Parameter-Typ;
+        // der Sender darf ein Array oder eine andere strukturell passende Klasse senden.
+        $mq->run(); // Erst jetzt Callbacks ausführen; Erfolgsrückkehr bestätigt die Kopie.
     } finally {
         $mq->close();
     }
 }
 
-// Separates Sender-Beispiel nach Implementierung; der Publisher provisioniert nichts.
-// Fehlt users oder die passende Bindung, kann die Anwendung den Zustand anzeigen.
-function publishFromFrontend(): void
+function publishUserCreated(string $userId, string $email): void
 {
     $mq = new PhoreMQ(...demoConnection());
     try {
-        $mq->publish('users', 'user.created.v1', [
-            'userId' => 'u-789',
-            'email' => 'user@example.org',
-        ]);
+        $mq->publish('users', 'user.created.v1', ['userId' => $userId, 'email' => $email], options: new PublishOptions(reply: false));
+        // Rückkehr bestätigt Broker-Annahme; beide Worker können noch arbeiten.
     } catch (QueueConfigurationMissingException $error) {
-        // reason: TOPIC_MISSING oder NO_MATCHING_SUBSCRIPTION.
         printf("Queue-Konfiguration fehlt für %s / %s (%s).\n",
             $error->topic, $error->messageType, $error->reason);
-        echo "Möglicherweise wurde der zuständige Listener-Dienst noch nicht initialisiert.\n";
-        // Kein automatisches Neuanlegen oder erneutes Senden.
-        // Eine vorhandene Queue ohne aktiven Worker löst diesen Fehler nicht aus.
+        // HTTP-Backend bildet diesen Zustand auf seine Fehlerantwort ab.
+        // Keine automatische Anlage durch den Publisher; kein stiller Erfolg.
+        throw $error;
     } finally {
         $mq->close();
     }
+}
+
+// Alternative Sendeseite mit Schema-Prüfung; injizierte MQ wurde wie im Worker
+// mit Registry konfiguriert. Diese Funktion besitzt/schließt die Connection nicht.
+function publishValidatedUser(MessageQueueInterface $mq, string $userId, string $email): void
+{
+    $event = new LocalUserCreated();
+    $event->userId = $userId;
+    $event->email = $email;
+    $mq->publish($event, options: new PublishOptions(reply: false)); // Registry liefert Topic/Typ; erforderliche Felder prüfen, dann senden.
+}
+
+function demonstrateValidationFailure(MessageQueueInterface $mq): void
+{
+    try {
+        $mq->publish('users', 'user.created.v1', ['userId' => 'missing-email'], options: new PublishOptions(reply: false));
+    } catch (MessageValidationException $error) {
+        // Nur mit registriertem Contract: user.created.v1 / $.email / required.
+        // Validierung vor Publish; diese ungültige Nachricht wurde nicht gesendet.
+        printf("Ungültige Nachricht: %s\n", $error->getMessage());
+    }
+}
+
+// Weitere unabhängige Subscription ohne DTO/Schema; zuerst registrieren, dann run.
+function runTelemetryWorker(): void
+{
+    $mq = new PhoreMQ(...demoConnection());
+    try {
+        $mq->subscribe('telemetry', 'audit-telemetry', static function (array $event): void {
+            printf("Telemetry: %s\n", json_encode($event, JSON_THROW_ON_ERROR));
+        }); // Kein type-Filter: Handler muss alle Typen des Topics verarbeiten können.
+        $mq->run();
+    } finally {
+        $mq->close();
+    }
+}
+
+// Separate Laufzeitvariante für eine bereits registrierte, injizierte Connection.
+function processBatch(MessageQueueInterface $mq): void
+{
+    $mq->run(maxMessages: 100, maxSeconds: 30, idleTimeoutSeconds: 2);
+    // maxMessages: höchstens 100 abgeschlossene Zustellversuche über alle Gruppen,
+    // inklusive Retry/Reject; nicht 100 erfolgreiche/eindeutige Geschäftsoperationen.
+    // maxSeconds: 30 s Gesamtbudget inklusive Warten und Handlerlaufzeit.
+    // idleTimeoutSeconds: Ende nach 2 s Warten ohne fachliche Zustellung.
+    // Erstes Limit gewinnt; normale Rückkehr auch bei weniger/keinen Nachrichten.
+    // Ein synchroner Handler darf fertig werden und das Zeitbudget überschreiten.
+    // Kein minMessages; eine erforderliche Anzahl prüft die Anwendung selbst.
+    // Ohne Limits läuft run() bis stop() oder Infrastrukturfehler.
+}
+
+function processBatchWithOptions(MessageQueueInterface $mq, RunOptions $options): void
+{
+    $mq->run($options, maxMessages: 100); // Direkter Wert ersetzt nur dieses Optionsfeld.
+    // Alternatives Beispiel, nicht zusätzlich processBatch() aufrufen.
+    // Optionsobjekte bleiben unverändert; alle gesetzten Limits müssen positiv sein.
 }

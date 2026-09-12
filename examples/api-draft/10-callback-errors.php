@@ -9,6 +9,7 @@ require_once __DIR__ . '/connection.php';
 use function Examples\MessageQueue\demoConnection;
 
 use Phore\MessageQueue\PhoreMQ;
+use Phore\MessageQueue\PublishOptions;
 use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\SubscriptionOptions;
 use Phore\MessageQueue\QueueOptions;
@@ -19,10 +20,10 @@ use Phore\MessageQueue\Exception\ConnectionException;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Verbindungsvorgaben: 01-connect.php.
- * demo() mit einem frischen Demo-Namespace aufrufen.
+ * processFailureScenarios() mit einem frischen Demo-Namespace aufrufen.
  * Dieses Beispiel verändert keine externen Daten; echte Jobs brauchen Idempotenz.
  */
-function demo(): void
+function processFailureScenarios(): void
 {
     $mq = new PhoreMQ(...demoConnection());
     try {
@@ -30,6 +31,9 @@ function demo(): void
             if (!is_string($job['mode'] ?? null)) {
                 // Dauerhaft ungültige Eingabe: keine Wiederholung; sichere Fehlerablage.
                 throw new RejectMessageException('Das Pflichtfeld mode fehlt.');
+            }
+            if (!in_array($job['mode'], ['temporary', 'unexpected'], true)) {
+                throw new RejectMessageException('Unbekannter Verarbeitungsmodus.');
             }
             if ($job['mode'] === 'temporary' && $context->attempt < 3) {
                 // Simulierte temporäre Störung. Versuch 1 und 2 scheitern, 3 gelingt.
@@ -47,9 +51,9 @@ function demo(): void
             maxAttempts: 4, retryDelaySeconds: 2, // Erstversuch zählt mit; jeweils 2 s warten.
         )));
 
-        $mq->publish('jobs.demo', 'demo.process.v1', ['mode' => 'temporary']);
-        $mq->publish('jobs.demo', 'demo.process.v1', []);
-        $mq->publish('jobs.demo', 'demo.process.v1', ['mode' => 'unexpected']);
+        $mq->publish('jobs.demo', 'demo.process.v1', ['mode' => 'temporary'], options: new PublishOptions(reply: false));
+        $mq->publish('jobs.demo', 'demo.process.v1', [], options: new PublishOptions(reply: false));
+        $mq->publish('jobs.demo', 'demo.process.v1', ['mode' => 'unexpected'], options: new PublishOptions(reply: false));
 
         // Hier: 1 erster Versuch + höchstens 3 Wiederholungen,
         // mit jeweils 2 Sekunden Verzögerung; Profildefault wäre 10 s, ohne Jitter. Kein enger Requeue-Loop.

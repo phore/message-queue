@@ -86,3 +86,5 @@ Work/RPC verwenden standardmäßig vier Versuche mit jeweils zehn Sekunden Absta
 Bestehende Queue-Contracts werden geprüft und bei Konflikt abgelehnt, nicht
 zwischen Container-Versionen automatisch hin- und hergeschrieben. Alles bleibt
 API-Entwurf; keine MQ-Runtime ist durch diese Beispiele implementiert.
+
+[Anwendungsbeispiele mit Ablauf- und Objektübersicht](examples/api-draft/README.md): Sender/Worker getrennt, RPC über `request($dto)->await()`, Sendekonfiguration einheitlich in `PublishOptions`. Antwortfrist: `replyTimeoutSeconds` beim Versand; lokales Warten: `timeoutSeconds` bei `await`.

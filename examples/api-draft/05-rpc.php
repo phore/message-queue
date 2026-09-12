@@ -14,21 +14,18 @@ use Phore\MessageQueue\Attribute\RemoteError;
 use Phore\MessageQueue\Rpc\RemoteException;
 use Phore\MessageQueue\Attribute\MessageType;
 use Phore\MessageQueue\PublishOptions;
-use Phore\MessageQueue\RunOptions;
 use Phore\MessageQueue\Rpc\AwaitOptions;
-use Phore\MessageQueue\Exception\ConnectionException;
 use Phore\MessageQueue\Rpc\CommandFailedException;
 use Phore\MessageQueue\Rpc\Notice;
 use Phore\MessageQueue\Rpc\RemoteCommandException;
 use Phore\MessageQueue\Rpc\RequestContext;
 use Phore\MessageQueue\Rpc\RequestTimeoutException;
 use Phore\MessageQueue\SubscriptionOptions;
-use Phore\MessageQueue\QueueOptions;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal §§ 13–14.
  * Nach Implementierung: zuerst runServer() in Prozess A starten,
- * dann runClient() in Prozess B. Beide nutzen denselben RabbitMQ-Namespace.
+ * dann divideFromApplication() in Prozess B. Beide nutzen denselben RabbitMQ-Namespace.
  * RPC-Ablauf (geplante Library, nicht manuell in der Anwendung nachzubauen):
  * 1. Vor publish: private exklusive Classic-Reply-Queue + eindeutiges Binding
  *    an gemeinsamer interner Exchange anlegen und Reply-Consumer bestätigen lassen.
@@ -109,115 +106,134 @@ final class DivideHandler
     }
 }
 
+// Worker-Entrypoint: erst Handler registrieren, dann blockierend empfangen.
 function runServer(): void
 {
     $mq = new PhoreMQ(...demoConnection());
     try {
         $mq->respond('calculator', 'calculator-workers', [new DivideHandler(), 'divide'],
-            new SubscriptionOptions(type: 'math.divide.v1', queue: QueueOptions::rpc()));
-
-        // Gleichwertige Alternative mit Attributen, NICHT zusätzlich registrieren:
-        // $mq->registerHandlers(new DivideHandler());
-        // maxMessages: maximal 100 Zustellversuche insgesamt, nicht je Subscription.
-        // maxSeconds: bis zu 60 s Gesamtbudget inklusive Leerlauf; erstes Limit gewinnt.
-        // Ein laufender synchroner Handler darf noch fertig werden, ggf. über die 60 s.
-        // Erreichen dieser Grenzen ist normale Rückkehr, keine Timeout-Exception.
-        // minMessages ist nicht vorgesehen; weniger als 100 Versuche sind zulässig.
-        $mq->run(maxMessages: 100, maxSeconds: 60);
-        // Alternativen: run(new RunOptions(maxMessages: 100, maxSeconds: 60))
-        // oder run(new RunOptions(maxSeconds: 60), maxMessages: 100).
-        // Direkte Werte überschreiben dieselben Optionsfelder, ohne das Objekt zu ändern.
+            new SubscriptionOptions(type: 'math.divide.v1'));
+        // Alternative zur Zeile oben: $mq->registerHandlers(new DivideHandler());
+        $mq->run(); // return aus divide() wird zum Reply; danach Request-Ack.
     } finally {
         $mq->close();
     }
 }
 
-function runClient(): void
+// HTTP-/Anwendungsschicht: ein Command, ein Ergebnis.
+// await wirft RequestTimeoutException (Ausgang unbekannt) oder RemoteCommandException
+// (sicherer fachlicher Fehler). Die Anwendung darüber entscheidet über ihre Fehlerantwort.
+function divideFromApplication(float $a, float $b): float
 {
     $mq = new PhoreMQ(...demoConnection());
     try {
-        // Publish erkennt das DTO und übernimmt Topic/Typ. Sendet sofort.
-        $sent = $mq->publish(new Divide(12, 3));
-        // Andere lokale Arbeit wäre hier möglich; der Broker hat die Nachricht bereits.
-        // timeoutSeconds: maximal 5 s LOKALES Warten ab diesem await-Aufruf,
-        // begrenzt durch die verbleibende, schon beim Publish gesetzte Antwortfrist.
-        // Bereits vorhandene finale Antwort: sofortige Rückgabe ohne neue Sendung.
-        // Kein finales Result/Error bis dahin: RequestTimeoutException (catch unten),
-        // niemals null/false oder ein leeres scheinbar erfolgreiches Reply.
-        $reply = $sent->await(timeoutSeconds: 5);
-        printf("Ergebnis: %s\n", $reply->payload['quotient']); // 4
+        $reply = $mq->request(new Divide($a, $b))->await(timeoutSeconds: 5);
+        return $reply->payload['quotient'];
+    } finally {
+        $mq->close(); // Diese Funktion besitzt ihre Connection, auch im Fehlerfall.
+    }
+}
 
-        // Gleicher Aufruf in einer Zeile; await sendet NICHT erneut.
-        $reply = $mq->publish(new Divide(15, 3))->await(timeoutSeconds: 5);
+// Erweiterter Aufruf: Wire-Deadline beim Senden, Auswertung erst beim Warten.
+function divideWithNotices(): array
+{
+    $mq = new PhoreMQ(...demoConnection());
+    try {
+        $sent = $mq->request('calculator', 'math.divide.v1', ['a' => 12, 'b' => 0.5],
+            new PublishOptions(
+                replyTimeoutSeconds: 15, // Antwortfrist ab Senden; enthält Queue-Wartezeit.
+                metadata: ['app.traceId' => 'trace-demo-42', 'app.locale' => 'de-DE'],
+            )); // Schon gesendet, kein Builder. request erzwingt den Rückkanal vor Versand.
 
-        // Ohne Warten: ignoriertes SendResult verzögert oder verhindert das Senden nicht.
-        $mq->publish(new Divide(20, 4));
-        // Der Responder arbeitet trotzdem; seine nicht benötigte Antwort läuft ab/wird verworfen.
-
-        // Programmatische Variante, Metadaten vor Publish, Warteoptionen erst bei await.
-        $pending = $mq->publish('calculator', 'math.divide.v1', ['a' => 12, 'b' => 0.5], new PublishOptions(
-            reply: true, // Rückkanal zwingend: fehlende Konfiguration scheitert VOR Publish.
-            replyTimeoutSeconds: 15, // Wire-Deadline ab Senden; await verlängert sie nicht.
-            metadata: ['app.traceId' => 'trace-demo-42', 'app.locale' => 'de-DE'],
-        ));
-        $reply = $pending->await(new AwaitOptions(timeoutSeconds: 10),
-            timeoutSeconds: 5, // Direkter Wert überschreibt hier die 10 Sekunden.
-            // onNotice: Zwischenmeldungen ausgeben; sie beenden await nicht und
-            // setzen weder die lokale Wartefrist noch die Remote-Deadline zurück.
+        $reply = $sent->await(
+            timeoutSeconds: 5, // Nur dieser lokale Warteaufruf, längstens bis Wire-Deadline.
             onNotice: static function (Notice $notice): void {
                 printf("%s [%s]: %s\n", $notice->level, $notice->code, $notice->message);
             },
         );
-        printf("Ergebnis: %s, Worker: %s\n", $reply->payload['quotient'], $reply->metadata['app.worker']);
-        // reply->notices enthält die finale Zusammenfassung; nicht doppelt ausgeben.
-        // responseClass: lokale DTO-Klasse für reply->payload; vor Rückgabe strukturell
-        // prüfen/hydrieren. Ohne Angabe Array; benötigt bei DTOs die Schema-Bridge.
-        // Beispiel: await(responseClass: LocalResult::class).
-        // Reine Events können mit PublishOptions(reply: false) ohne Antwortaufwand senden.
+        // Warnings sind Zwischenmeldungen, kein Abbruch und keine Fristverlängerung.
+        // Ergebnis-Payload, Metadaten und finale Notice-Zusammenfassung bleiben getrennt.
+        // onNotice wurde schon ausgeführt; reply->notices nicht nochmals ausgeben.
+        return ['quotient' => $reply->payload['quotient'], 'worker' => $reply->metadata['app.worker']];
+    } finally {
+        $mq->close(); // Exceptions bleiben für die aufrufende Anwendung sichtbar.
+    }
+}
 
-        // 1. Allgemeine Fehlerbehandlung: kein Fehler-Topic abonnieren erforderlich.
-        try {
-            $mq->publish(new Divide(12, 0))->await(timeoutSeconds: 5);
-        } catch (RemoteCommandException $error) {
-            // Kein lokales Mapping: generische Exception, aber gleiche freigegebene Meldung.
-            printf("Remote-Fehler [%s]: %s\n", $error->errorCode, $error->getMessage());
-        }
-
-        // 2. Gewünschte lokale Exception-Klasse ausdrücklich freigeben.
-        try {
-            $mq->publish(new Divide(12, 0))->await(
-                timeoutSeconds: 5,
-                errorTypes: [DivisionByZero::class],
-            );
-        } catch (DivisionByZero $error) {
-            // Gleiche SDK-Klasse und Meldung wie auf dem Server, lokal neu erzeugt.
-            printf("Division korrigieren: %s\n", $error->getMessage());
-        } catch (RemoteCommandException $error) {
-            // Unbekannter anderer Fehler bleibt ein generischer Remote-Fehler.
-            printf("RPC fehlgeschlagen: %s\n", $error->getMessage());
-        }
-        // Alternativ await(new AwaitOptions(errorTypes: [DivisionByZero::class])).
-        // Der Client darf auch eine andere lokale Klasse mit demselben RemoteError-Namen
-        // registrieren. Keine entfernten PHP-Klassennamen, Stacktraces oder unserialize().
-
-    } catch (ConnectionException $connectionError) {
-        // Transportausfall: offene Calls dieser Connection sind nicht fortsetzbar.
-        // Kein automatisches erneutes publish; bei Schreiboperationen erst den
-        // persistenten operationId-/Ergebnisstatus prüfen. Supervisor darf neu starten.
-        throw $connectionError;
-    } catch (RequestTimeoutException $timeout) {
-        // await wirft RequestTimeoutException bei abgelaufener lokaler Wartefrist
-        // oder ursprünglicher Antwortdeadline ohne rechtzeitig empfangenes finales Ergebnis.
-        // Der Fehler enthält requestId. Er ist kein RemoteCommandException:
-        // ein bekannter fachlicher Fehler des Responders ist eine andere Ursache.
-        // Ein Timeout stoppt das entfernte Command NICHT und sendet es nicht erneut.
-        // Falls die ursprüngliche Antwortfrist noch läuft, kann derselbe SendResult
-        // erneut await() aufrufen. Nicht publish() wiederholen: das wäre ein neuer Job.
-        printf("Keine rechtzeitige Antwort für Request %s\n", $timeout->requestId);
+// Lokale Exception ausdrücklich freigeben; keine entfernte PHP-Deserialisierung.
+function divideWithTypedError(float $a, float $b): float
+{
+    $mq = new PhoreMQ(...demoConnection());
+    try {
+        $reply = $mq->request(new Divide($a, $b))->await(
+            timeoutSeconds: 5, errorTypes: [DivisionByZero::class],
+        );
+        return $reply->payload['quotient'];
+    } catch (DivisionByZero $error) {
+        printf("Eingabe korrigieren: %s\n", $error->getMessage());
+        throw $error; // Freigegebene SDK-Klasse und sichere Servermeldung.
+    } catch (RemoteCommandException $error) {
+        throw $error; // Andere Remote-Fehler behalten den generischen Typ.
     } finally {
         $mq->close();
     }
 }
 
-// request(...)->await() bleibt eine explizite RPC-Komfortform (Beispiel 08).
-// subscribe-Handler antworten nicht automatisch: Ohne respond endet await im Timeout.
+// Gleichwertige Sendemethode: publish mit explizit aktivierter Antwortfähigkeit.
+function divideUsingPublish(float $a, float $b): float
+{
+    $mq = new PhoreMQ(...demoConnection());
+    try {
+        $sent = $mq->publish(new Divide($a, $b), options: new PublishOptions(reply: true));
+        return $sent->await(timeoutSeconds: 5)->payload['quotient'];
+        // Mit rpc.enabled in der Connection darf reply:true auch entfallen.
+        // request($dto) drückt die RPC-Absicht bereits im Methodennamen aus.
+        // PublishOptions(reply:false) sendet ein Event; späteres await ist dann ein Fehler.
+    } finally {
+        $mq->close();
+    }
+}
+
+// Nach lokalem Timeout denselben Handle weiterverwenden, solange Wire-Frist läuft.
+function divideWithSecondWait(float $a, float $b): float
+{
+    $mq = new PhoreMQ(...demoConnection());
+    try {
+        $sent = $mq->request(new Divide($a, $b), options: new PublishOptions(replyTimeoutSeconds: 15));
+        try {
+            $reply = $sent->await(timeoutSeconds: 2);
+        } catch (RequestTimeoutException) {
+            $reply = $sent->await(timeoutSeconds: 5); // Kein zweiter Request.
+        }
+        return $reply->payload['quotient'];
+    } finally {
+        $mq->close();
+    }
+}
+
+// Ergebnis-Darstellung gehört zum lokalen Empfänger, unabhängig von der Serverklasse.
+final class LocalDivisionResult
+{
+    public float $quotient;
+}
+
+function divideAsLocalDto(float $a, float $b): LocalDivisionResult
+{
+    $mq = new PhoreMQ(...demoConnection());
+    try {
+        $reply = $mq->request(new Divide($a, $b))->await(
+            timeoutSeconds: 5, responseClass: LocalDivisionResult::class,
+        );
+        return $reply->payload; // Struktur prüfen/hydrieren; keine Server-FQCN vergleichen.
+    } finally {
+        $mq->close();
+    }
+}
+
+// Alternativ await(new AwaitOptions(timeoutSeconds: 5)); direkte Werte überschreiben
+// dasselbe Feld. responseClass gehört nur zu await und hydriert das lokale Ergebnis.
+// await prüft Optionen NACH dem Senden: falsche Klasse/ungültiger Timeout kann den
+// bereits veröffentlichten Request nicht zurücknehmen. DTOs brauchen die Schema-Bridge.
+// ConnectionException/PublishException entstehen beim Transport und werden nicht als
+// RemoteCommandException umgedeutet. Bei Abbruch können alte Handles nicht auf eine
+// neue Connection übertragen werden. Die Anwendung entscheidet über Wiederanlauf.

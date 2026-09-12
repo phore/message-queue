@@ -8,6 +8,10 @@ use Phore\MessageQueue\ConnectionOptions;
 
 /**
  * API-ENTWURF: ConnectionOptions::fromArray ist noch nicht implementiert.
+ * Gibt nur [DSN, Optionen] zurück: kein Connect, keine Topologieanlage.
+ * new PhoreMQ(...demoConnection()) verbindet anschließend sofort.
+ * Die Demo aktiviert RPC: publish kann deshalb später await unterstützen.
+ * Reine Events setzen in den Beispielen ausdrücklich reply: false.
  * Einmalige Demo-Konfiguration für alle Beispiele; keine Environment-Reads.
  * Explizite Felder in $overrides ergänzen/überschreiben die Basisoptionen;
  * ausgelassene Felder behalten die Werte aus der Konfigurationsdatei.

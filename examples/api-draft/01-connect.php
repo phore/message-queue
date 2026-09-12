@@ -25,7 +25,7 @@ function connectDemo(): PhoreMQ
     return new PhoreMQ(...demoConnection());
 }
 
-// 2. Direkter Konstruktor mit allen relevanten Produktionsoptionen.
+// 2. Explizite Verbindung: diese Funktion verbindet bereits beim Aufruf.
 // Zugangsdaten und Signierschlüssel liefert die Anwendung, keine implizite Env-Suche.
 function connectConfigured(string $username, string $password, string $sharedSecret): PhoreMQ
 {
@@ -57,6 +57,7 @@ function connectByFactory(): PhoreMQ
     return (new ConnectionFactory())->connect(...demoConnection());
 }
 
+// Aufrufer besitzt die hier zurückgegebene Verbindung und ruft close() in finally.
 // Pro Prozess einmal erzeugen und weiterreichen. Kein Singleton.
 // Konstruktor/Factory verbinden sofort; Fehler sind Exceptions, kein Lazy-Connect.
 // Der Adapter gehört genau einem PhoreMQ; close() schließt seine Ressourcen.

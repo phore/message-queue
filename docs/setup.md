@@ -255,3 +255,5 @@ weiter auf dem Host mit seiner Host-Konfiguration. Es werden nur zwei einzelne
 Ports veröffentlicht, keine Port-Range: 5672 für AMQP und 15672 für Management.
 
 [Internes Docker-Deployment ohne Management-Plugin, optional SASL ANONYMOUS](../deployment/rabbitmq/HOWTO.md): Compose-Netzwerk und Datenvolume werden automatisch angelegt; das How-to erklärt vHost, Ports und die noch fehlende Kompatibilität mit der vollständigen PhoreMQ-Topologieprüfung.
+
+[Anwendungsbeispiele mit Ablauf- und Objektübersicht](../examples/api-draft/README.md): Sender/Worker getrennt, RPC über `request($dto)->await()`, Sendekonfiguration einheitlich in `PublishOptions`. Antwortfrist: `replyTimeoutSeconds` beim Versand; lokales Warten: `timeoutSeconds` bei `await`.
