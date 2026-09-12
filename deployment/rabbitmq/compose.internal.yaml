@@ -1,0 +1,34 @@
+# Eigenständiges Beispiel: nicht mit compose.yaml (Management-Demo) kombinieren.
+# Start aus dem Repo: docker compose -f deployment/rabbitmq/compose.internal.yaml up -d --wait
+services:
+  rabbitmq:
+    image: rabbitmq:4.3
+    hostname: phore-mq-internal
+    restart: unless-stopped
+    environment:
+      # Automatische Erstinitialisierung; bekannte Werte nur für diese interne Demo.
+      RABBITMQ_DEFAULT_USER: mq-demo
+      RABBITMQ_DEFAULT_PASS: mq-demo-password
+      RABBITMQ_DEFAULT_VHOST: app
+      # Erlang-Anwendungsparameter direkt im offiziellen Image; keine .conf-Datei.
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: >-
+        -rabbit auth_mechanisms ['PLAIN']
+        -rabbit anonymous_login_user none
+    volumes:
+      - data:/var/lib/rabbitmq
+    networks:
+      - mq
+    # Keine ports: Host/LAN erhalten keinen veröffentlichten Broker-Port.
+    # expose ist ebenfalls nicht erforderlich: Dienste im Netz erreichen rabbitmq:5672.
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+networks:
+  mq:
+    driver: bridge
+    internal: true
+volumes:
+  data:

@@ -1,0 +1,185 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Examples\MessageQueue\Attributes;
+
+require_once __DIR__ . '/connection.php';
+
+use function Examples\MessageQueue\demoConnection;
+
+use Phore\MessageQueue\Attribute\MessageType;
+use Phore\MessageQueue\Attribute\Subscribe;
+use Phore\MessageQueue\Attribute\Queue;
+use Phore\MessageQueue\QueueProfile;
+use Phore\MessageQueue\PhoreMQ;
+use Phore\MessageQueue\PublishOptions;
+use Phore\MessageQueue\SubscriptionOptions;
+use Phore\MessageQueue\Exception\MessageMappingException;
+use Phore\MessageQueue\Exception\InvalidHandlerException;
+use Phore\MessageQueue\MessageContext;
+use Phore\MessageQueue\MessageQueueInterface;
+
+/**
+ * API-ENTWURF, noch nicht ausführbar. Proposal §§ 4–6.
+ * Für ein echtes SDK würde T_UserCreated in einer eigenen Composer-Library
+ * liegen. Hier bleiben alle Teile zum Lesen in einer Beispieldatei.
+ */
+
+// Feste Gruppe: mehrere Worker mit dieser Vorgabe TEILEN die Zustellungen.
+#[MessageType('user.created.v1', topic: 'users', subscription: 'sdk-users')]
+// Queue-Vorgaben werden beim Subscriber geprüft/angelegt, niemals beim publish.
+#[Queue(profile: QueueProfile::WorkQueue, revision: 1, maxAttempts: 4, retryDelaySeconds: 10)]
+final class T_UserCreated
+{
+    public string $userId;
+    public string $email;
+}
+
+final class UserHandlers
+{
+    // Alle drei Werte kommen aus T_UserCreated. Keine doppelte Definition.
+    #[Subscribe]
+    public function onCreated(T_UserCreated $user, MessageContext $context): void
+    {
+        printf("SDK: %s / %s\n", $context->messageId, $user->email);
+        // Erfolgreiche Rückkehr bestätigt automatisch.
+    }
+
+    // Auch Attribute erzwingen keine Typisierung: hier unveränderte Array-Daten.
+    #[Subscribe(topic: 'users', subscription: 'raw-users', type: 'user.created.v1')]
+    public function onRawCreated(array $data): void
+    {
+        printf("Array: %s\n", json_encode($data, JSON_THROW_ON_ERROR));
+    }
+}
+
+function publishUserCreated(MessageQueueInterface $mq): void
+{
+    $user = new T_UserCreated();
+    $user->userId = 'u-789';
+    $user->email = 'sdk-user@example.org';
+
+    $mq->publish($user, options: new PublishOptions(reply: false)); // Liest MessageType, validiert und serialisiert.
+
+}
+
+// Separate Alternative: exakt ein Event, ohne SDK-Objekt.
+function publishUserCreatedAsArray(MessageQueueInterface $mq): void
+{
+    $mq->publish('users', 'user.created.v1', [
+        'userId' => 'u-790',
+        'email' => 'manual@example.org',
+    ], options: new PublishOptions(reply: false));
+}
+
+function runAttributeWorker(): void
+{
+    $mq = new PhoreMQ(...demoConnection());
+    try {
+        // Attributvariante: Resolver liest Methodensignatur und DTO-Metadaten.
+        $mq->registerHandlers(new UserHandlers());
+        $mq->run(); // Erst hier werden die registrierten Handler aufgerufen.
+    } finally {
+        $mq->close();
+    }
+}
+
+// Getrennte Prozesse: Empfänger legt/bindet Subscriptions vor dem ersten Senden
+// an und ruft run() auf. Sender ruft danach publishUserCreated() auf seiner eigenen Connection
+// auf. Beide verwenden denselben RabbitMQ-Namespace (Vorgaben in 01-connect.php).
+
+// Alternative zur Attributregistrierung: nur den Callback übergeben.
+// Auf einer eigenen MQ-Instanz statt runAttributeWorker()/registerHandlers() ausführen.
+function runCallbackWorker(): void
+{
+    $mq = new PhoreMQ(...demoConnection());
+    try {
+        $mq->subscribe(function (T_UserCreated $user, MessageContext $context): void {
+            printf("Callback: %s / %s\n", $context->messageId, $user->email);
+        }); // users + sdk-users + user.created.v1; automatische Hydration.
+        $mq->run(); // Alternative zum Attribut-Worker, gleicher Empfangsvertrag.
+    } finally {
+        $mq->close();
+    }
+}
+
+// Alternativ ist auch $mq->subscribe([$handlers, 'onCreated']) möglich.
+// NICHT zusätzlich dieselbe Methode über registerHandlers() registrieren.
+
+// Dieser Contract ist topic- und gruppenunabhängig; der Wire-Typ steht nur hier.
+#[MessageType('audit.entry.v1')]
+final class T_AuditEntry
+{
+    public string $text;
+}
+
+final class AuditHandlers
+{
+    // Nur offene Angaben ergänzen; type ergibt sich aus T_AuditEntry.
+    #[Subscribe(topic: 'audit.users', subscription: 'audit-reader')]
+    public function onEntry(T_AuditEntry $entry): void
+    {
+        printf("Audit: %s\n", $entry->text);
+    }
+}
+
+function demoMultipleTopics(): void
+{
+    $mq = new PhoreMQ(...demoConnection());
+    try {
+        $handler = static function (T_AuditEntry $entry): void {
+            printf("Audit: %s\n", $entry->text);
+        };
+        foreach (['audit.users', 'audit.billing'] as $topic) {
+            $mq->subscribe($handler, options: new SubscriptionOptions(
+                topic: $topic, subscription: 'audit-reader',
+            ));
+        }
+        // Alternative für audit.users: registerHandlers(new AuditHandlers()).
+        // Die Alternative ersetzt dessen obige Registrierung, nicht zusätzlich aufrufen.
+        $entry = new T_AuditEntry();
+        $entry->text = 'Ein Vorgang wurde abgeschlossen.';
+        $mq->publish('audit.users', 'audit.entry.v1', $entry, options: new PublishOptions(reply: false));
+        $mq->publish('audit.billing', 'audit.entry.v1', $entry, options: new PublishOptions(reply: false));
+        // publish($entry) wäre MAPPING_INCOMPLETE: kein festes Topic auf diesem DTO.
+        // Höchstens 2 Zustellversuche insgesamt oder 10 s Gesamtbudget; erstes Limit gewinnt.
+        // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
+        $mq->run(maxMessages: 2, maxSeconds: 10);
+    } finally {
+        $mq->close();
+    }
+}
+
+// Separates Fehlerbeispiel; kein Workerstart, kein Senden erforderlich.
+function demonstrateConflicts(MessageQueueInterface $mq): void
+{
+    $typed = static function (T_UserCreated $event): void {};
+    try {
+        $mq->subscribe($typed, options: new SubscriptionOptions(topic: 'other.users'));
+    } catch (MessageMappingException $error) {
+        printf("Mappingkonflikt: %s\n", $error->getMessage());
+        // MAPPING_CONFLICT: field=topic, MessageType=users, options=other.users.
+        // Ablehnung vor Broker-Binding; kein stilles Überschreiben.
+    }
+
+    try {
+        $mq->subscribe(static function (T_AuditEntry $entry): void {});
+    } catch (MessageMappingException $error) {
+        printf("Mapping unvollständig: %s\n", $error->getMessage());
+        // MAPPING_INCOMPLETE: missingFields=[topic, subscription].
+    }
+
+    $subscription = $mq->subscribe($typed);
+    try {
+        try {
+            $mq->subscribe($typed);
+        } catch (InvalidHandlerException $error) {
+            printf("Doppelte Registrierung: %s\n", $error->getMessage());
+            // DUPLICATE_SUBSCRIPTION: users/sdk-users bereits lokal registriert.
+            // Derselbe Gruppenname in einem anderen Workerprozess ist dagegen erlaubt.
+        }
+    } finally {
+        $subscription->cancel(); // Lokalen Consumer abmelden; Broker-Binding und dauerhafte Queue bleiben.
+    }
+}

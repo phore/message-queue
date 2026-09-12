@@ -1,0 +1,125 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Examples\MessageQueue\Metadata;
+
+require_once __DIR__ . '/connection.php';
+
+use function Examples\MessageQueue\demoConnection;
+
+use Phore\MessageQueue\PhoreMQ;
+use Phore\MessageQueue\ConnectionOptions;
+use Phore\MessageQueue\Exception\RejectMessageException;
+use Phore\MessageQueue\MessageContext;
+use Phore\MessageQueue\Middleware\OutgoingMessage;
+use Phore\MessageQueue\PublishOptions;
+use Phore\MessageQueue\PublishReceipt;
+use Phore\MessageQueue\SubscriptionOptions;
+
+/**
+ * API-ENTWURF, noch nicht ausführbar. Proposal § 14.
+ * Zwei optionale Callable-Hooks, keine Middleware-Basisklasse erforderlich.
+ * Beispielaufruf: processOrderWithDiagnostics($traceId), mit frischem Demo-Namespace.
+ */
+
+function processOrderWithDiagnostics(string $traceId): void
+{
+    // Separate Connection ohne Diagnose-Middleware verhindert Fehlerschleifen.
+    $diagnostics = new PhoreMQ(...demoConnection());
+
+    try {
+        $mq = new PhoreMQ(...demoConnection(new ConnectionOptions(
+            sendMiddleware: [
+                // $next: callable(OutgoingMessage): PublishReceipt
+                static function (OutgoingMessage $message, callable $next) use ($traceId): PublishReceipt {
+                    // Ergänzt nur app.*-Metadaten; Payload bleibt fachlich unverändert.
+                    // Signierung erfolgt nach diesem Hook.
+                    return $next($message->withMetadata(['app.traceId' => $traceId]));
+                },
+            ],
+            handleMiddleware: [
+                // $next: callable(mixed, MessageContext): mixed
+                static function (mixed $payload, MessageContext $context, callable $next) use ($diagnostics): mixed {
+                    try {
+                        // Rückgabe durchreichen: funktioniert auch um RPC-Responder.
+                        return $next($payload, $context);
+                    } catch (\Throwable $original) {
+                        try {
+                            $diagnostics->publish('diagnostics', 'diagnostic.v1', [
+                                'level' => 'error',
+                                'code' => 'HANDLER_FAILED',
+                                'message' => 'Eine Nachricht konnte nicht verarbeitet werden.',
+                            ], new PublishOptions(
+                                reply: false,
+                                correlationId: $context->correlationId ?? $context->messageId,
+                                metadata: [
+                                    'app.traceId' => $context->metadata['app.traceId'] ?? 'unknown',
+                                    'app.sourceTopic' => $context->topic,
+                                ],
+                            ));
+                        } catch (\Throwable) {
+                            // Lokaler, redigierter Fallback; keine rekursive MQ-Meldung.
+                            error_log('Die MQ-Diagnosemeldung konnte nicht versendet werden.');
+                        }
+                        // Ursprüngliche Ausnahme bewahren: kein fälschliches Erfolgs-Ack.
+                        throw $original;
+                    }
+                },
+            ],
+        )));
+
+        try {
+            $diagnostics->subscribe('diagnostics', 'diagnostic-viewer', static function (array $notice, MessageContext $context): void {
+                printf("%s [%s], Bezug %s\n", $notice['level'], $notice['code'], $context->correlationId);
+            }, new SubscriptionOptions(type: 'diagnostic.v1'));
+
+            $mq->subscribe('orders', 'order-workers', static function (array $order, MessageContext $context): void {
+                // Separat zugänglich, nicht in $order integriert.
+                printf("Auftrag %s, Sprache %s, Trace %s\n",
+                    $order['orderId'],
+                    $context->metadata['app.locale'] ?? 'en',
+                    $context->metadata['app.traceId']);
+
+                if (($order['mode'] ?? '') === 'reject') {
+                    throw new RejectMessageException('Der Beispielauftrag wurde abgelehnt.');
+                }
+            }, new SubscriptionOptions(type: 'order.submit.v1'));
+
+            // Einfacher Event-Aufruf mit frei gewählten, begrenzten Anwendungsmetadaten.
+            $mq->publish('orders', 'order.submit.v1', ['orderId' => 'order-42'], new PublishOptions(
+                reply: false,
+                correlationId: 'request-42',
+                metadata: ['app.locale' => 'de-DE'],
+            ));
+            // Höchstens 1 Zustellversuche insgesamt oder 5 s Gesamtbudget; erstes Limit gewinnt.
+            // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
+            $mq->run(maxMessages: 1, maxSeconds: 5);
+
+            // Eine Warning direkt als gewöhnliches Event versenden: keine neue API nötig.
+            $diagnostics->publish('diagnostics', 'diagnostic.v1', [
+                'level' => 'warning',
+                'code' => 'OPTIONAL_DATA_MISSING',
+                'message' => 'Optionale Auftragsdaten fehlen.',
+            ], new PublishOptions(
+                reply: false,
+                correlationId: 'request-42',
+                metadata: ['app.traceId' => $traceId],
+            ));
+            // Höchstens 1 Zustellversuche insgesamt oder 5 s Gesamtbudget; erstes Limit gewinnt.
+            // Normale Rückkehr, keine Mindestzahl/Timeout-Exception; Details in 02-programmatic.php.
+            $diagnostics->run(maxMessages: 1, maxSeconds: 5);
+
+            // Zweite Aktion: permanenter Fehler, Middleware veröffentlicht Diagnose.
+            $mq->publish('orders', 'order.submit.v1', ['orderId' => 'order-43', 'mode' => 'reject'], options: new PublishOptions(reply: false));
+            $mq->run(maxMessages: 1, maxSeconds: 5); // Reject wird sicher abgelegt.
+            $diagnostics->run(maxMessages: 1, maxSeconds: 5); // Diagnose tatsächlich anzeigen.
+            // run wirft hier nicht den Reject: die Runtime hat ihn bereits behandelt.
+            // RPC-Begleitmeldungen am Rückkanal zeigt zusätzlich Beispiel 05.
+        } finally {
+            $mq->close();
+        }
+    } finally {
+        $diagnostics->close();
+    }
+}

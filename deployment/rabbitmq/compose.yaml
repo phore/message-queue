@@ -1,0 +1,22 @@
+# Nur lokale Entwicklung: bekannte Demo-Zugangsdaten, Ports nur auf Loopback.
+services:
+  rabbitmq:
+    image: rabbitmq:4.3-management
+    hostname: phore-mq-demo
+    environment:
+      RABBITMQ_DEFAULT_USER: demo
+      RABBITMQ_DEFAULT_PASS: demo
+      RABBITMQ_DEFAULT_VHOST: demo
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+volumes:
+  data:
