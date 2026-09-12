@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\Programmatic;
 
+require_once __DIR__ . '/connection.php';
+
+use function Examples\MessageQueue\demoConnection;
+
 use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\Exception\MessageValidationException;
@@ -14,8 +18,8 @@ use Phore\MessageQueue\SubscriptionOptions;
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal §§ 5–6 und 11.
  * Beispielaufruf nach Implementierung: demo().
- * Dafür ein frisches lokales Queue-Verzeichnis verwenden: zwei neue Subscriptions werden
- * vor dem Publish gebunden. Bei wiederverwendetem Verzeichnis kann Backlog anliegen.
+ * Dafür ein frischen Demo-Namespace verwenden: zwei neue Subscriptions werden
+ * vor dem Publish gebunden. Bei wiederverwendetem Namespace kann Backlog anliegen.
  */
 
 // Beliebige eigene Klasse: kein gemeinsames SDK und keine Attribute notwendig.
@@ -30,7 +34,7 @@ function demo(): void
     $registry = new MessageRegistry();
     $registry->register('user.created.v1', LocalUserCreated::class, topic: 'users');
 
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo', new ConnectionOptions(registry: $registry));
+    $mq = new PhoreMQ(...demoConnection(new ConnectionOptions(registry: $registry)));
     // Nur das hier gezeigte Klassenmapping ergänzen; Verbindung siehe 01-connect.php.
 
     try {

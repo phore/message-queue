@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\CallbackErrors;
 
+require_once __DIR__ . '/connection.php';
+
+use function Examples\MessageQueue\demoConnection;
+
 use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\SubscriptionOptions;
@@ -14,12 +18,12 @@ use Phore\MessageQueue\Exception\ConnectionException;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Verbindungsvorgaben: 01-connect.php.
- * demo() mit einem frischen lokalen Queue-Verzeichnis aufrufen.
+ * demo() mit einem frischen Demo-Namespace aufrufen.
  * Dieses Beispiel verändert keine externen Daten; echte Jobs brauchen Idempotenz.
  */
 function demo(): void
 {
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
+    $mq = new PhoreMQ(...demoConnection());
     try {
         $mq->subscribe('jobs.demo', 'demo-workers', function (array $job, MessageContext $context): void {
             if (!is_string($job['mode'] ?? null)) {
@@ -45,14 +49,14 @@ function demo(): void
         $mq->publish('jobs.demo', 'demo.process.v1', ['mode' => 'unexpected']);
 
         // Vorgeschlagener Standard: 1 erster Versuch + höchstens 3 Wiederholungen,
-        // mit 1/2/4 Sekunden Verzögerung und ±10 % Jitter. Kein enger Requeue-Loop.
+        // mit 1/2/4 Sekunden Verzögerung und ohne Jitter. Kein enger Requeue-Loop.
         // RetryableMessageException hebt die Obergrenze NICHT auf.
         // temporary: Erfolg im Versuch 3; fehlendes mode: sofort Fehlerablage;
         // unexpected: nach Versuch 4 Fehlerablage. Insgesamt 8 Zustellversuche.
         // Das ist keine Reihenfolgegarantie. Verarbeitung anderer Jobs läuft weiter.
         // maxSeconds beendet normal; es garantiert nicht, dass alle Retries fertig sind.
         $mq->run(maxMessages: 8, maxSeconds: 30);
-        // file-Profil speichert endgültige Fehler im lokalen FailureStore (siehe 01).
+        // Der RabbitMQ-Adapter speichert endgültige Fehler bestätigt in der Fehlerqueue.
         // In Produktion nach Ursachenbehebung gezielt redriven, nicht blind neu senden.
     } catch (FailureStoreException | ConnectionException $infrastructureError) {
         // Infrastrukturfehler sind anders als behandelte Callback-Fehler:

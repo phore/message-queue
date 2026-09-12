@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\SystemCheck;
 
+require_once __DIR__ . '/connection.php';
+
+use function Examples\MessageQueue\demoConnection;
+
 use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\Exception\RetryableMessageException;
@@ -48,7 +52,7 @@ function runExportWorker(
     ), topic: 'jobs.export', type: 'export.create.v1');
     $refresh($state);
 
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo', new ConnectionOptions(health: new HealthOptions(
+    $mq = new PhoreMQ(...demoConnection(new ConnectionOptions(health: new HealthOptions(
         state: $state,
         refresh: $refresh,
         refreshIntervalSeconds: 5,
@@ -59,7 +63,7 @@ function runExportWorker(
             'processMemoryBytes' => memory_get_usage(true),
             'processPeakMemoryBytes' => memory_get_peak_usage(true),
         ],
-    )));
+    ))));
     try {
         $mq->respond('jobs.export', 'export-workers',
             static function (array $parameters) use ($processExport, $state, $denied): array {
@@ -82,7 +86,7 @@ function runExportWorker(
 
 function frontendConnection(string $instanceId): MessageQueueInterface
 {
-    return new PhoreMQ('file:///tmp/phore-mq-demo', new ConnectionOptions(health: new HealthOptions(
+    return new PhoreMQ(...demoConnection(new ConnectionOptions(health: new HealthOptions(
         state: new HealthState(serviceId: 'frontend-backend', instanceId: $instanceId),
         requirements: [
             // Mein System BRAUCHT diesen Nachrichtentyp, mit mindestens einem Worker.
@@ -96,7 +100,7 @@ function frontendConnection(string $instanceId): MessageQueueInterface
                 subscriptions: ['audit-service', 'mail-service'],
             ),
         ],
-    )));
+    ))));
 }
 
 function checkAtLogin(MessageQueueInterface $mq): array

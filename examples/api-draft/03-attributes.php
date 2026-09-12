@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\Attributes;
 
+require_once __DIR__ . '/connection.php';
+
+use function Examples\MessageQueue\demoConnection;
+
 use Phore\MessageQueue\Attribute\MessageType;
 use Phore\MessageQueue\Attribute\Subscribe;
 use Phore\MessageQueue\PhoreMQ;
@@ -62,7 +66,7 @@ function send(MessageQueueInterface $mq): void
 
 function demo(): void
 {
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
+    $mq = new PhoreMQ(...demoConnection());
     try {
         // Attributvariante: Resolver liest Methodensignatur und DTO-Metadaten.
         $mq->registerHandlers(new UserHandlers());
@@ -77,13 +81,13 @@ function demo(): void
 
 // Getrennte Prozesse: Empfänger legt/bindet Subscriptions vor dem ersten Senden
 // an und ruft run() auf. Sender ruft danach send() auf seiner eigenen Connection
-// auf. Beide verwenden dasselbe lokale Queue-Verzeichnis (Vorgaben in 01-connect.php).
+// auf. Beide verwenden denselben RabbitMQ-Namespace (Vorgaben in 01-connect.php).
 
 // Alternative zur Attributregistrierung: nur den Callback übergeben.
 // Auf einer eigenen MQ-Instanz statt demo()/registerHandlers() ausführen.
 function demoCallback(): void
 {
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
+    $mq = new PhoreMQ(...demoConnection());
     try {
         $mq->subscribe(function (T_UserCreated $user, MessageContext $context): void {
             printf("Callback: %s / %s\n", $context->messageId, $user->email);
@@ -120,7 +124,7 @@ final class AuditHandlers
 
 function demoMultipleTopics(): void
 {
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
+    $mq = new PhoreMQ(...demoConnection());
     try {
         $handler = static function (T_AuditEntry $entry): void {
             printf("Audit: %s\n", $entry->text);

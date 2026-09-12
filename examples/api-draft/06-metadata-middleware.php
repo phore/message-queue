@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\Metadata;
 
+require_once __DIR__ . '/connection.php';
+
+use function Examples\MessageQueue\demoConnection;
+
 use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\Exception\RejectMessageException;
@@ -17,16 +21,16 @@ use Phore\MessageQueue\SubscriptionOptions;
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal § 14.
  * Zwei optionale Callable-Hooks, keine Middleware-Basisklasse erforderlich.
- * Beispielaufruf: demo($traceId), mit frischem lokalen Queue-Verzeichnis.
+ * Beispielaufruf: demo($traceId), mit frischem Demo-Namespace.
  */
 
 function demo(string $traceId): void
 {
     // Separate Connection ohne Diagnose-Middleware verhindert Fehlerschleifen.
-    $diagnostics = new PhoreMQ('file:///tmp/phore-mq-demo');
+    $diagnostics = new PhoreMQ(...demoConnection());
 
     try {
-        $mq = new PhoreMQ('file:///tmp/phore-mq-demo', new ConnectionOptions(
+        $mq = new PhoreMQ(...demoConnection(new ConnectionOptions(
             sendMiddleware: [
                 // $next: callable(OutgoingMessage): PublishReceipt
                 static function (OutgoingMessage $message, callable $next) use ($traceId): PublishReceipt {
@@ -63,7 +67,7 @@ function demo(string $traceId): void
                     }
                 },
             ],
-        ));
+        )));
 
         try {
             $diagnostics->subscribe('diagnostics', 'diagnostic-viewer', static function (array $notice, MessageContext $context): void {

@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\Rpc;
 
+require_once __DIR__ . '/connection.php';
+
+use function Examples\MessageQueue\demoConnection;
+
 use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\Attribute\Respond;
 use Phore\MessageQueue\Attribute\RemoteError;
@@ -23,8 +27,8 @@ use Phore\MessageQueue\SubscriptionOptions;
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal §§ 13–14.
  * Nach Implementierung: zuerst runServer() in Prozess A starten,
- * dann runClient() in Prozess B. Beide nutzen dasselbe lokale Queue-Verzeichnis.
- * Der file-Adapter vergibt pro Client einen eigenen Rückkanal; Details in 01-connect.php.
+ * dann runClient() in Prozess B. Beide nutzen denselben RabbitMQ-Namespace.
+ * Der RabbitMQ-Adapter vergibt pro Client einen eigenen Rückkanal; Details in 01-connect.php.
  */
 
 #[MessageType('math.divide.v1', topic: 'calculator')]
@@ -76,7 +80,7 @@ final class DivideHandler
 
 function runServer(): void
 {
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
+    $mq = new PhoreMQ(...demoConnection());
     try {
         $mq->respond('calculator', 'calculator-workers', [new DivideHandler(), 'divide'],
             new SubscriptionOptions(type: 'math.divide.v1'));
@@ -99,7 +103,7 @@ function runServer(): void
 
 function runClient(): void
 {
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
+    $mq = new PhoreMQ(...demoConnection());
     try {
         // Publish erkennt das DTO und übernimmt Topic/Typ. Sendet sofort.
         $sent = $mq->publish(new Divide(12, 3));

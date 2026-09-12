@@ -5,7 +5,7 @@ Stell dir einen Export vor: Die ZIP-Datei ist fertig, dann stürzt der Worker ab
 
 Dieser kleine Abstand zwischen „erledigt“ und „bestätigt“ erklärt viele Entscheidungen beim Einsatz einer Message Queue. Ein Broker vermittelt Nachrichten und kann sie aufbewahren. Er kann aber nicht allein garantieren, dass ein externer Arbeitsschritt genau einmal ausgeführt wird. Publisher-Bestätigung und Consumer-Bestätigung betreffen unterschiedliche Schritte. [RabbitMQ: Bestätigungen](https://www.rabbitmq.com/docs/confirms)
 
-**Stand: 12. September 2026. Dieses Paket ist ein API-Entwurf. Noch keiner der hier genannten Adapter ist implementiert.** Die Brokerfunktionen existieren unabhängig davon; die folgenden Zuordnungen beschreiben ihre geplante Nutzung durch PhoreMQ.
+**Stand: 12. September 2026. Dieses Paket ist ein API-Entwurf. RabbitMQ ist als einziger Adapter vorgesehen und noch nicht implementiert.** Die Brokerfunktionen existieren unabhängig davon; die folgenden Zuordnungen beschreiben ihre geplante Nutzung durch PhoreMQ.
 
 ## Die Begriffe an einem Beispiel
 
@@ -15,7 +15,7 @@ Ein Benutzer wurde angelegt. Der Maildienst soll eine Begrüßung versenden, der
 |---|---|
 | Producer / Publisher | Die Anwendung, die das Ereignis veröffentlicht |
 | Message / Payload | Die Nachricht und ihre fachlichen Daten, etwa Benutzer-ID und E-Mail |
-| Broker | Die vermittelnde Infrastruktur, beispielsweise Redis oder RabbitMQ |
+| Broker | Die vermittelnde Infrastruktur, in diesem Paket RabbitMQ |
 | Topic | Der logische Kanal `users` in diesem Paket |
 | Message type | Der fachliche Vertrag `user.created.v1`; ein Topic kann mehrere Typen tragen |
 | Subscription | Ein benanntes Abonnement für die Nachrichten eines Dienstes: `mail-users` oder `audit-users` |
@@ -23,7 +23,7 @@ Ein Benutzer wurde angelegt. Der Maildienst soll eine Begrüßung versenden, der
 | Subject / Routing key | Brokerabhängige Routingbegriffe; keine zusätzlichen Pflichtargumente der PhoreMQ-API |
 | Envelope | Payload plus technische Angaben wie ID, Typ, Korrelation und Signatur |
 
-Ein NATS-*Subject* ist die Routingadresse einer Nachricht. Ein JetStream-Stream kann Nachrichten mehrerer Subjects speichern; ein Consumer bestimmt, welche davon er liest. Bei RabbitMQ routet dagegen eine Exchange anhand von Bindings und gegebenenfalls Routing Keys in Queues. Diese Begriffe lassen sich nicht überall eins zu eins auf „Topic“ abbilden. Der Adapter übernimmt die Zuordnung. [NATS: Streams](https://docs.nats.io/learn/jetstream/your-first-stream), [RabbitMQ: Exchanges](https://www.rabbitmq.com/docs/exchanges)
+Ein Topic ist hier der logische Kanal, ein Subject die Routingbezeichnung eines Nachrichtentyps. Die API verwendet dafür nur `type`. RabbitMQ bildet Topic und Subscription auf Exchange und Queue ab; der Typ wird zum Routing Key. Ein Subject ist keine separat anzulegende Ressource. Die konkrete Zuordnung und den Docker-Start zeigt der [Setup-Guide](setup.md).
 
 ## Eine Nachricht für alle — oder Arbeit für einen
 
@@ -34,7 +34,7 @@ Im PhoreMQ-Entwurf bestimmt die Subscription die Verteilung:
 
 „Nur einer“ meint hier einen Worker, nicht einen Broker. Mehrere Brokerknoten können gemeinsam die Infrastruktur bilden und Daten replizieren. Daraus folgt nicht, dass die Anwendung denselben Job mehrfach bearbeiten soll.
 
-Bei Lastverteilung gewinnt ein verfügbarer Worker nach den Regeln des jeweiligen Brokers. Gleichmäßiger Zufall ist nicht garantiert. Mehr Worker erlauben parallele Verarbeitung, verändern aber die Reihenfolge der Fertigstellung. Nach einem Verbindungs- oder Lease-Verlust können sogar zwei Versuche zeitweise überlappen: Ein alter Worker arbeitet weiter, während ein anderer übernimmt. [RabbitMQ: Consumers](https://www.rabbitmq.com/docs/consumers), [Redis: Consumer Groups](https://redis.io/docs/latest/commands/xreadgroup/)
+Bei Lastverteilung gewinnt ein verfügbarer Worker nach den Zustellregeln von RabbitMQ. Gleichmäßiger Zufall ist nicht garantiert. Mehr Worker erlauben parallele Verarbeitung, verändern aber die Reihenfolge der Fertigstellung. Nach einem Verbindungsabbruch können sogar zwei Versuche zeitweise überlappen: Ein alter Worker arbeitet weiter, während ein anderer übernimmt. [RabbitMQ: Consumers](https://www.rabbitmq.com/docs/consumers)
 
 ## Was eine Zustellgarantie tatsächlich umfasst
 
@@ -43,7 +43,7 @@ Der geplante Normalfall besteht aus vier Schritten:
 1. `publish()` sendet. Der Broker bestätigt seine Annahme; daraus entsteht `SendResult::receipt`.
 2. Ein Worker erhält eine Zustellung, die zunächst als offen gilt.
 3. Der Handler verarbeitet die Nachricht. Erst nach erfolgreicher Rückkehr erfolgt standardmäßig die Verarbeitungsbestätigung (Ack).
-4. Fehlt die Bestätigung, wird der Auftrag nach den Regeln für Lease und Retry wieder verfügbar. Nach endgültigem Scheitern bleibt er in einer Fehlerablage. Broker verwenden dafür häufig eine Dead-Letter Queue (DLQ); die Library kann auch eine eigene Ablage nutzen.
+4. Fehlt die Bestätigung, wird der Auftrag nach Verbindungsabbruch oder gemäß Retry-Policy wieder verfügbar. Nach endgültigem Scheitern bleibt er in einer Fehlerablage. Broker verwenden dafür häufig eine Dead-Letter Queue (DLQ); die Library kann auch eine eigene Ablage nutzen.
 
 **At least once** sagt unter den vereinbarten Aufbewahrungs- und Verfügbarkeitsbedingungen mindestens eine Zustellung an einen zuständigen Consumer zu. Solange dessen Bestätigung fehlt, sind weitere Zustellversuche möglich; Retry-Grenzen und endgültige Fehlerablage bestimmen, wann diese enden. Es ist keine unbegrenzte Erfolgsgarantie. **At most once** vermeidet Wiederholung, kann dafür Nachrichten verlieren. **Exactly once** für einen vollständigen Geschäftsprozess entsteht nicht allein durch Queue-Einstellungen.
 
@@ -55,49 +55,32 @@ Für den Export vom Einstieg hilft deshalb eine stabile Auftrags-ID: Der Worker 
 |---|---|
 | **Retention** | Wie lange hält die Infrastruktur die Nachricht überhaupt vor? Zeit-, Größen- oder Längenlimits können sie entfernen |
 | **TTL / Ablaufzeit** | Bis wann ist diese Nachricht noch gültig? Abgelaufene Nachrichten sind keine beliebig später ausführbaren Jobs |
-| **Lease / Visibility / Ack-Frist** | Wie lange darf ein Worker die offene Zustellung bearbeiten, bevor sie erneut verfügbar werden kann? |
+| **Ack-Frist** | Wann beendet RabbitMQ einen Consumer-Channel wegen ausbleibender Bestätigung? Das ist keine pro Nachricht verlängerbare Lease. |
 | **RPC-Wartefrist** | Wie lange wartet dieser Aufrufer auf eine Antwort? Ablauf stoppt die entfernte Arbeit nicht |
 
-## Welche Adapter vorgesehen sind
+## RabbitMQ als einzige Umsetzung
 
-Alle Statusangaben beziehen sich auf dieses Paket, nicht auf die Reife des jeweiligen Brokers.
+Die Architektur sieht einen RabbitMQ-Adapter hinter `ConnectorInterface` vor. Eine Laufzeit-Auswahl oder Registrierung weiterer Adapter gehört nicht dazu. Die öffentliche API verwendet weiterhin Topic, Subscription und Nachrichtentyp; der Adapter kapselt das konkrete Protokoll.
 
-| Adapter / Status | Fan-out und konkurrierende Worker | Bestätigung und Wiederholung | Aufbewahrung und wichtigste Grenze |
-|---|---|---|---|
-| **Redis Streams — erster produktiver Adapter geplant** | Eigene Gruppe je Subscription; Worker teilen eine Gruppe | `XACK` entfernt den Eintrag aus der Pending-Liste der Gruppe; Claim übernimmt verwaiste Zustellungen | Stream bleibt bis Trimming/Löschung; Ack allein löscht den Streameintrag nicht. Persistenz und Eviction müssen passend konfiguriert sein |
-| **Redis Pub/Sub — möglicher späterer Modus** | Aktive Subscriber erhalten Nachrichten | Keine dauerhafte Ack-/Recovery-Semantik | Keine Historie für offline gegangene Subscriber; kein Ersatz für Streams |
-| **SQS — geplanter Arbeitsqueue-Adapter** | Worker teilen eine Queue; eine Queue allein liefert keinen unabhängigen Fan-out | Visibility Timeout verbirgt die Zustellung vorübergehend, `DeleteMessage` bestätigt die Verarbeitung | Standardmäßig 4 Tage, konfigurierbar bis 14 Tage; Standard Queues erlauben Duplikate und bieten keine strenge Reihenfolge |
-| **SNS + SQS — geplanter Fan-out-Adapter** | SNS verteilt an eine SQS-Queue je Subscription; deren Worker teilen Arbeit | Annahme durch SNS und Zustellung nach SQS sind eigene Schritte; Retry-/DLQ-Konfiguration nötig | Nach Übergabe gilt die Retention der jeweiligen SQS-Queue; nicht als universelles Event-Archiv behandeln |
-| **Azure Service Bus — geplant** | Queues für Arbeitsverteilung, Topics mit Subscriptions für Fan-out | Peek-Lock, `Complete`, `Abandon`, Lock-Erneuerung und Dead Letter | TTL und Zustellgrenzen konfigurieren; Receive-and-Delete passt nicht zum geplanten Auto-Ack-nach-Erfolg |
-| **RabbitMQ — geplant** | Exchange/Bindings routen in Queues; Consumer einer Queue teilen Arbeit | Publisher Confirms und Consumer-Acks; Requeue/Dead Letter | Queue-/Message-TTL und Längenlimits konfigurieren; dauerhafte Queue, persistente Nachrichten und geeigneter Queue-Typ gehören zum Haltbarkeitskonzept |
-| **NATS JetStream — später geplant** | Eigenständige Consumer für unabhängige Sichten; gemeinsam genutzter Pull-Consumer für Worker | Stream-Publish-Ack und explizites Consumer-Ack, Redelivery nach Ack-Frist | Limits-, Interest- und WorkQueue-Retention unterscheiden sich. WorkQueue passt nicht zu beliebig überlappenden unabhängigen Consumern |
-| **In-Memory — für Tests geplant** | Lokale Gruppen am selben ausdrücklich geteilten Brokerobjekt | Vom Testadapter nachgebildet | Prozessende verliert Zustand; keine Kommunikation zwischen unabhängigen Prozessen |
-| **file — lokaler Entwicklungsadapter geplant** | Prozesse desselben OS-Benutzers teilen einen SQLite-Queue-Root | Transaktionale Claims, Leases und Fehlerablage sind Teil des Entwurfs | Lokale Dateien überleben Neustarts; Retention/Bereinigung nötig. Kein NFS-/Multi-Host-Adapter |
-| **Unix-Dev-Broker — Anschlussphase geplant** | Separater lokaler Prozess verwaltet Gruppen | Eigenes lokales MQ-Protokoll erforderlich | Im Entwurf volatil; Broker-Neustart verliert Zustand. Ein Unix-Socket allein ist keine Queue |
-
-Belege zu den Brokerzeilen: [Redis Streams](https://redis.io/docs/latest/develop/data-types/streams/), [Redis Pub/Sub](https://redis.io/docs/latest/develop/pubsub/), [SQS Retention](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-queue-parameters.html), [SQS Standard Queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/standard-queues.html), [SNS an SQS](https://docs.aws.amazon.com/sns/latest/dg/sns-sqs-as-subscriber.html), [Azure Settlement](https://learn.microsoft.com/en-us/azure/service-bus-messaging/message-transfers-locks-settlement), [RabbitMQ Confirms](https://www.rabbitmq.com/docs/confirms), [JetStream Retention](https://docs.nats.io/learn/jetstream/retention-policies). Die drei lokalen Adapterzeilen sind eigene Designentscheidungen; Details im [API-Proposal](proposals/2026-09-12-message-queue-api.md).
-
-FIFO-Funktionen, etwa bei SQS, sowie Sessions oder geordnete Consumer können bestimmte Reihenfolgen absichern. Sie sind keine universelle Zusage dieser Abstraktion und müssen später als konkrete Adapter-Capability beschrieben werden. Core NATS ist außerdem von JetStream zu unterscheiden: Sein gewöhnlicher Pub/Sub-Betrieb ist kein persistenter JetStream-Consumer. [SQS FIFO](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-fifo-queues.html), [NATS: JetStream](https://docs.nats.io/learn/jetstream)
+Dauerhafte fachliche Subscriptions werden als Quorum Queues angelegt. Publisher Confirms bestätigen die Annahme; Consumer-Acks schließen die Verarbeitung ab. Mehrere Worker einer Queue teilen deren Arbeit. Die einzelne Docker-Instanz aus dem Setup besitzt keine Ausfallredundanz, auch wenn sie denselben Queue-Typ nutzt. [RabbitMQ Quorum Queues](https://www.rabbitmq.com/docs/quorum-queues)
 
 ## Aufbewahrung passend zur Anwendung wählen
 
-Es gibt daher keine gemeinsame Antwort „alle Nachrichten bleiben sieben Tage“. Bei Redis kann Trimming die Historie kürzen, bei SQS gilt die Queue-Retention, bei JetStream zusätzlich die gewählte Retention-Policy. Azure kann abgelaufene Nachrichten je Einstellung entfernen oder dead-lettern. Auch Dead-Letter-Speicher brauchen eine eigene Aufbewahrungs- und Bereinigungsregel. [Redis XTRIM](https://redis.io/docs/latest/commands/xtrim/), [Azure Ablaufzeiten](https://learn.microsoft.com/en-us/azure/service-bus-messaging/message-expiration)
+Ein erfolgreiches Ack entfernt die Nachricht aus ihrer Subscription. Ohne Ack bleibt sie bis zur Verarbeitung, expliziten Entfernung oder einem konfigurierten Ablauf-/Größenlimit erhalten. Die Demo setzt keine automatische Nachrichten-TTL und ist kein dauerhaftes Ereignisarchiv. Die Fehlerablage benötigt ebenfalls eine bewusste Bereinigung. [RabbitMQ TTL](https://www.rabbitmq.com/docs/ttl)
 
-Die Aufbewahrung muss zu erwarteten Ausfällen und Wiederholungen passen. Bei großen ZIP-Dateien gilt das zusätzlich für die ausgelagerte Datei: Eine erhaltene Nachricht mit bereits gelöschtem Attachment ist nicht mehr vollständig verarbeitbar.
+Eine neue Subscription erhält nur Nachrichten ab ihrer Bindung, keine früheren Ereignisse. Ein Worker-Neustart verwendet dagegen den bestehenden Rückstand. Bei ZIP-Dateien muss zusätzlich der referenzierte Dateispeicher lang genug verfügbar bleiben.
 
 ## Was der Anwendungsentwickler konfiguriert
 
-Für die **geplanten lokalen Beispiele** reicht:
+Verbindung und gemeinsame Vorgaben stehen in [config/message-queue.json](../config/message-queue.json). Der [Setup-Guide](setup.md) erklärt die bereits nutzbare Docker-Instanz und das Python-Skript. Die PHP-Beispiele verwenden nach Implementierung:
 
 ```php
-$mq = new PhoreMQ('file:///tmp/phore-mq-demo');
+$mq = new PhoreMQ(...demoConnection());
 ```
 
-Das lokale Profil bündelt Queue, Fehlerablage, Attachment-Store, einen persistenten lokalen Signaturschlüssel und eindeutige RPC-Rückkanäle. Voraussetzungen und die explizite Redis-/Factory-Konfiguration stehen einmalig in [01-connect.php](../examples/api-draft/01-connect.php). Es ist kein Produktions-Sicherheitsprofil für mehrere Dienste oder Benutzer.
+Die Hilfsfunktion lädt ausdrücklich die gemeinsame Datei; sie gehört nur zu den Beispielen. Die Demo erlaubt mit `autoCreate` dynamische Topics und Subscriptions und wählt bewusst einen unsignierten lokalen Testmodus. Produktionskonfiguration verwendet eigene Zugangsdaten, TLS und eine passende Security-Policy. Ein Dateispeicher wird separat injiziert.
 
-Danach entscheidet die Anwendung vor allem über drei Dinge: **Routing** (wer braucht welche Nachrichten?), **Lebensdauer** (wie lange darf Arbeit offen bleiben?) und **Fehlerbehandlung** (wann erneut versuchen, wann endgültig ablegen?). Topics, Bindings und Berechtigungen werden bei Netzwerkbrokern in Produktion vorab provisioniert; die Library legt sie nur mit ausdrücklich erlaubtem `autoCreate` an.
-
-Ein Prozess kann mehrere Handler registrieren. `run(maxMessages: 100, maxSeconds: 30)` verarbeitet ihre Zustellungen, bis das erste Limit erreicht ist. Es bedeutet weder 100 parallele Jobs noch garantiert 100 erfolgreiche Jobs. Synchrone Handler laufen in einem Worker nacheinander; für Parallelität startet die Anwendung mehrere Worker derselben Subscription. Lange Jobs brauchen passende Leases oder deren Verlängerung. Details und Rückkehrbedingungen stehen in [02-programmatic.php](../examples/api-draft/02-programmatic.php).
+Ein Prozess kann mehrere Handler registrieren. `run(maxMessages: 100, maxSeconds: 30)` begrenzt Zustellversuche und Gesamtlaufzeit, garantiert aber keine Zahl erfolgreicher Jobs. Synchrone Handler laufen nacheinander. Mehrere Prozesse derselben Subscription ermöglichen Parallelität; `maxInFlight` begrenzt vorgeholte offene Zustellungen pro Consumer. Lange Jobs brauchen passende Ack-Fristen und laufende Heartbeat-Verarbeitung. [Worker-Beispiel](../examples/api-draft/02-programmatic.php)
 
 ## Wie eine Antwort zum richtigen Aufrufer zurückkommt
 
@@ -120,9 +103,9 @@ bereits vorbereitet — sie entsteht nicht erst beim späteren `await()`.
 **Zwei unabhängige Clients dürfen nicht dieselbe konkurrierende Reply-Subscription
 benutzen.** Sonst könnte A die Antwort für B abholen. Ein geteilter Rückkanal
 benötigt stattdessen einen bewusst eingerichteten zentralen Verteiler, der alle
-Aufrufe kennt. Die Standardeinstellung des lokalen file-Profils erzeugt deshalb
-eigene Reply-Endpunkte je MQ-Instanz. Bei Netzwerkbrokern werden diese und ihre
-Berechtigungen konfiguriert. Die Request-ID verknüpft Antworten; Signaturen,
+Aufrufe kennt. Die explizit aktivierte RPC-Konfiguration erzeugt deshalb
+eigene Reply-Endpunkte je MQ-Instanz im reservierten RabbitMQ-Bereich. Die
+Berechtigungen dafür werden beim Deployment festgelegt. Die Request-ID verknüpft Antworten; Signaturen,
 zugelassene Reply-Ziele und verifizierte Identitäten schützen zusätzlich vor
 fremden Antworten. Eine erratene oder kopierte ID ist keine Berechtigung.
 
@@ -194,4 +177,4 @@ Bei Callback-Exceptions sieht der Entwurf begrenzte Wiederholungen mit wachsende
 
 `check()` unterscheidet Verbindung und nachrichtenspezifische Bereitschaft. Ein erreichbarer Broker beweist noch keinen bereiten Handler; ein fehlendes Ping-Reply beweist nicht die Abwesenheit eines Listeners. Statusmeldungen haben deshalb Quellen und Ablaufzeiten. [Systemcheck](../examples/api-draft/09-system-check.php)
 
-Nicht universell zugesagt werden Exactly-once-Seiteneffekte, globale Reihenfolge, Prioritäten, Replay oder verteilte Locks. Fehlende Adapterfähigkeiten sollen früh als `UnsupportedCapabilityException` auffallen. Für den Export bedeutet das: Die Queue kann einen verlorenen Zustellversuch ersetzen. Ob eine ZIP-Datei bereits erfolgreich erstellt wurde, muss die Anwendung weiterhin zuverlässig erkennen.
+Nicht universell zugesagt werden Exactly-once-Seiteneffekte, globale Reihenfolge, Prioritäten, Replay oder verteilte Locks. Unbekannte Optionen, widersprüchliche Topologie und nicht routbare Nachrichten sollen früh mit aussagekräftigen Exceptions auffallen. Für den Export bedeutet das: Die Queue kann einen verlorenen Zustellversuch ersetzen. Ob eine ZIP-Datei bereits erfolgreich erstellt wurde, muss die Anwendung weiterhin zuverlässig erkennen.

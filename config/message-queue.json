@@ -1,0 +1,36 @@
+{
+  "connection": "amqp://demo:demo@127.0.0.1:5672/demo",
+  "options": {
+    "autoCreate": true,
+    "maxInFlight": 1,
+    "security": {
+      "mode": "unsigned"
+    },
+    "rpc": {
+      "enabled": true,
+      "replyNamespace": "_phore.rpc"
+    },
+    "managementUrl": "http://127.0.0.1:15672"
+  },
+  "topics": [
+    "users",
+    "telemetry"
+  ],
+  "subscriptions": [
+    {
+      "topic": "users",
+      "name": "audit-users",
+      "type": "user.created.v1"
+    },
+    {
+      "topic": "users",
+      "name": "billing-users",
+      "type": "user.created.v1"
+    },
+    {
+      "topic": "telemetry",
+      "name": "audit-telemetry",
+      "type": null
+    }
+  ]
+}

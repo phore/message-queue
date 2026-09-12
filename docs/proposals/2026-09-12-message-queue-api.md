@@ -11,39 +11,34 @@
 | 2026-09-12 | dermatthes | §§ 1.1, 2, 5, 6.2, 11, 13, 13.1, 13.2, 13.4, 14.1: Einheitliches publish für DTO/Explizitform, optionales await, direkte Laufzeitparameter und Deadline-Regeln ergänzt |
 | 2026-09-12 | dermatthes | §§ 5, 13.4: Worker-Limits, fehlendes minMessages und await-Timeout-Exception in den Beispielen erläutert |
 | 2026-09-12 | dermatthes | §§ 4, 4.1, 7, 8, 10, 11.1, 13.1, 13.2, 13.4, 13.5: Kurze lokale file-Beispiele, zentrale Verbindungsvorgaben, Callback-Fehler und typisierte RPC-Exceptions ergänzt |
+| 2026-09-12 | dermatthes | §§ 1–5, 7–16: RabbitMQ als einzige Umsetzung beschlossen; Interface ohne Austauschlogik, neutrale Konfiguration, Docker-Setup und Beispiele vereinheitlicht |
 
 ## § 1 Abstract und Lieferumfang
 
-Eine frameworkunabhängige PHP-Library stellt eine gemeinsame Zugriffsschicht
-für Topics, dauerhafte Subscriptions und Worker bereit. Redis Streams ist der
-erste produktive Konnektor. Das zentrale Objekt `PhoreMQ` wird direkt mit
-DSN oder Konnektor und `ConnectionOptions` erzeugt; alternativ liefert die
-Connection-Factory dasselbe Objekt. Message-Typen besitzen stabile fachliche Namen; ihre PHP-Klassen
-dürfen sich zwischen Anwendungen unterscheiden. `phore/schema` validiert und
-hydriert optional die lokal erwartete Struktur. PHP-Attribute ergänzen die
-programmatische API. Signierung und Dateispeicher sind austauschbare Dienste.
-Eine optionale Request/Reply-Schicht ergänzt RPC mit Rückgabewerten und
-Begleitmeldungen; Metadaten und Middleware bleiben vom Payload getrennt.
+**Architekturentscheidung, 2026-09-12: Die erste Umsetzung verwendet ausschließlich RabbitMQ über AMQP 0-9-1.** Ein `RabbitMQConnector` implementiert `ConnectorInterface`; die MQ-Logik spricht nur dieses Interface an. Es gibt keine Adapterregistrierung, Treiberauswahl, Capability-Aushandlung, Fallbacks oder Laufzeit-Austauschlogik. Die Interface-Grenze ermöglicht spätere Änderungen, ohne heute zusätzliche Broker zu entwerfen. [neu]
 
-**Dies ist ein Entwurf, keine implementierte oder installierbare API.** Das
-Ziel-Repository enthält bisher nur die Projektvorlage, keine `src/`- oder
-`test/`-Implementierung und keine eigene `SKILLS.md`. Als Namespace ist
-`Phore\MessageQueue` vorgesehen; Composer-Name/Autoloading bleiben in diesem PR
-unverändert. Beispiele verwenden PHP >=8.3, passend zur aktuellen Vorlage.
+Die frameworkunabhängige PHP-Library bietet Topics, dauerhafte Subscriptions,
+konkurrierende Worker, optionale strukturelle `phore/schema`-Hydration und
+PHP-Attribute. `PhoreMQ` akzeptiert DSN oder Adapter mit `ConnectionOptions`.
+RPC, Fehlerantworten, Metadaten, Middleware und Systemcheck bleiben Bestandteil
+des Entwurfs. Signierung und Dateireferenzen behalten ihre fachlichen Verträge. [neu]
 
-| Ausbaustufe | Geplanter Inhalt |
+**Die PHP-API ist noch nicht implementiert.** Composer-Metadaten und Autoloading
+bleiben unveränderte Template-Werte; Beispiele benötigen später PHP >=8.3.
+Der Docker-Start und das Python-Setup aus [Setup](../setup.md) sind davon
+unabhängige, verwendbare Entwicklungsdateien; sie implementieren keine MQ-Library. [neu]
+
+| Umfang | Entscheidung |
 |---|---|
-| Erste Umsetzung | Factory, Registry, JSON-Envelope, Topic/Subscription-API, Redis Streams, In-Memory, Callback-Worker, Ack/Retry/Dead Letter, Exceptions, HMAC, optionale Schema-Bridge und Attribute |
-| Anschlussphase | Attachment-/PayloadStore-Vertrag mit lokalem Dateispeicher; separater Unix-Entwicklungsbroker mit Konnektor |
-| Optionale RPC-Erweiterung | `request`/`respond`, Rückkanal, Ergebnis/Fehler/Warnings und Middleware aus §§ 13–14; baut auf der Queue-API auf |
-| Weitere Adapter | SQS für Arbeitsqueues, SNS+SQS für Fan-out, Azure Service Bus, RabbitMQ |
-| Spätere Erweiterungen | PGP-Provider, S3/Blob-PayloadStore, Batch, Delay, Filter, Replay, Telemetrie, optionale Outbox-/Inbox-Integration |
+| Transport | Genau ein RabbitMQ-Adapter hinter `ConnectorInterface` |
+| Zustellung | Dauerhafte Subscriptions, Quorum Queues, Publisher Confirms, Ack nach Handler-Erfolg |
+| API | `publish`, `subscribe`, `respond`, `run`, optional `await`; `check` für Diagnose |
+| Konfiguration | Generische Namen; `topic`, `subscription`, `type`, `namespace`, `maxInFlight`, `autoCreate` |
+| Entwicklung | Derselbe RabbitMQ-Adapter gegen einen Docker-Broker |
+| Dateiübertragung | Verifizierte Referenzen über ausdrücklich injizierten Dateispeicher; keine eigene Speicherplattform [neu] |
 
-Die Beispiele illustrieren auch die Anschlussphase, ausdrücklich ohne sie in
-diesem PR zu implementieren. Vor Umsetzung werden Konnektorabhängigkeiten und
-unterstützte Serverversionen festgelegt; für Redis ist >=6.2 wegen `XAUTOCLAIM`
-der vorgeschlagene Mindeststand. Provider-spezifische Erweiterungen dürfen
-nicht stillschweigend auf schwächere Semantik zurückfallen.
+Die Referenz für den Entwicklungsaufbau ist RabbitMQ 4.3 mit Management-Plugin.
+Die produktive PHP-Client-Abhängigkeit wird bei Implementierung festgelegt. [neu]
 
 ### § 1.1 Kleine API auf einen Blick
 
@@ -85,17 +80,17 @@ Dienstentwickler melden Zustandsänderungen über `HealthState::set()` in einem
 gemeinsamen lokalen Zustandsobjekt; Transport, aktive Meldung und Ping-Antwort
 verwaltet die Library. Details und standardisierter Vertrag in § 16.
 
-
 ## § 2 Begriffe und Zustellvertrag
 
 | Begriff | Bedeutung und Beispiel |
 |---|---|
 | Topic | Logischer Nachrichtenkanal, etwa `users`; unabhängig vom Backendnamen |
-| Message type | Fachlicher Vertrag, etwa `user.created.v1`; unabhängig von Namespace und Composer-Paket |
+| Message type / Subject | Fachlicher Vertrag und Routingbezeichnung, etwa `user.created.v1`; API-Name ist ausschließlich `type`, kein zusätzliches Subject-Argument |
+| Namespace | Isolierter Namensraum aus dem DSN-Pfad, etwa `demo`; im Adapter auf einen Virtual Host abgebildet |
 | Subscription | Dauerhafte benannte Sicht auf ein Topic, etwa `billing-users` |
 | Worker | Ein Prozess, der für eine Subscription arbeitet; mehrere teilen sich die Arbeit |
 | Envelope | Transportneutrale Metadaten, JSON-Payload und Attachment-Deskriptoren |
-| Delivery | Eine konkrete Zustellung inklusive opaque Receipt und Ack-/Retry-Steuerung |
+| Delivery | Eine konkrete Zustellung inklusive opaque Receipt und Ack-/Retry-Steuerung [geändert] |
 
 Jede dauerhafte Subscription erhält eine Kopie. Worker derselben Subscription
 sind konkurrierende Consumer. Beispiel: `billing-users` und `audit-users`
@@ -114,49 +109,48 @@ eine unklare Publish-Bestätigung bei Verbindungsabbruch.
 `SendResult::receipt` enthält ein `PublishReceipt`: Es bestätigt Backend-Annahme,
 keine Verarbeitung durch Empfänger. `SendResult::await()` liefert dagegen die
 fachliche Antwort eines Responders, keine Bestätigung aller Subscriber. Es gibt keine
-backendübergreifende Exactly-once-Garantie und keine globale Reihenfolge.
-Fachliche Seiteneffekte müssen anhand `messageId` idempotent sein.
+Exactly-once-Garantie und keine globale Reihenfolge.
+Fachliche Seiteneffekte benötigen eine stabile fachliche Idempotenz-ID; Wiederzustellungen behalten zusätzlich dieselbe `messageId`. [geändert]
 
-`subscribe()` bindet eine benannte Subscription und prüft ihre Konfiguration.
-Neue Subscriptions beginnen standardmäßig bei `StartPosition::Latest` zum
-Zeitpunkt ihrer Anlage; bestehende behalten ihren Cursor. Ein späterer
-Worker-Neustart setzt ihn niemals zurück. `Beginning` ist eine explizite
-Replay-Capability und umfasst nur noch aufbewahrte Einträge. In Produktion
-werden Topics und Subscriptions vorab provisioniert; nur eine ausdrücklich
-aktivierte `autoCreate`-Option darf Ressourcen anlegen. `cancel()` löst die
-lokale Bindung, löscht aber weder Subscription noch Rückstand.
+`subscribe()` bindet eine benannte Subscription und prüft ihren Vertrag.
+Eine neu angelegte Subscription empfängt erst Nachrichten ab Erstellung ihrer
+Bindung. Ein bestehender Rückstand bleibt bei Worker-Neustarts erhalten.
+Es gibt weder Start-Cursor noch Replay-Option. In Produktion werden fachliche
+Topics und Subscriptions vorab eingerichtet. `autoCreate: true` erlaubt
+explizit ihre dynamische Anlage; `cancel()` beendet nur den lokalen Consumer,
+löscht aber weder Subscription noch Rückstand. [neu]
 
 ## § 3 Abstraktionsschichten und Erweiterungspunkte
 
 | Baustein | Verantwortung |
 |---|---|
-| `ConnectionFactory` / `ConnectionOptions` | Alternative Erzeugung von `PhoreMQ` und gemeinsame Konfiguration; dieselbe DSN-Auflösung wie im Konstruktor |
+| `ConnectionFactory` / `ConnectionOptions` | Alternative Erzeugung von `PhoreMQ` und gemeinsame Konfiguration; derselbe RabbitMQ-Verbindungsaufbau wie im Konstruktor |
 | `PhoreMQ` | Zentrales Objekt; akzeptiert DSN oder Connector und Optionen, implementiert `MessageQueueInterface` und verwaltet den Lebenszyklus |
 | `MessageQueueInterface` | `publish`, `subscribe`, `request`, `respond`, `run`; Mapping-Komfort und Lebenszyklus gemäß § 1.1 |
 | `MessageRegistry` | Fachliche Namen, Sendeklassen, optionale Schemas und Default-Topics zuordnen |
 | `MessageCodecInterface` | JSON-kompatible Daten normalisieren, Envelope serialisieren und dekodieren |
 | `SchemaMapperInterface` | Optional Strukturen prüfen und in lokal konfigurierte DTOs hydrieren |
 | `MessageSecurityInterface` | Unveränderliche Nachrichtenbytes schützen und vor Verwendung verifizieren |
-| `ConnectorInterface` | Bytes publizieren/empfangen, Receipt bestätigen/freigeben, Fähigkeiten melden |
+| `ConnectorInterface` | RabbitMQ kapseln: Topologie prüfen/anlegen, Bytes senden/empfangen und Zustellungen abschließen |
 | `PayloadStoreInterface` | Streams ablegen, Referenzen auflösen, Lebensdauer verwalten |
-| `RetryPolicy` / `FailureStoreInterface` | Vorübergehende Fehler wiederholen, endgültige Fehler sicher ablegen |
+| `RetryPolicy` / `FailureStoreInterface` | Vorübergehende Fehler wiederholen, endgültige Fehler sicher ablegen [geändert] |
 
 Sendepfad: Typ/Topic auflösen → Send-Middleware ausführen → Daten normalisieren
-und ggf. validieren → Dateien ablegen → Envelope kodieren → signieren → Größen-/Capability-Prüfung
+und ggf. validieren → Dateien ablegen → Envelope kodieren → signieren → Größenprüfung
 → Konnektor. Empfangspfad: begrenzten Transportframe lesen → Signatur und
 Zeit-/Zielbindung prüfen → Envelope dekodieren → optional Dateien verifizieren
 → lokale Struktur prüfen/hydrieren → Handler-Middleware und Handler ausführen
 → bei RPC finale Antwort bestätigen lassen → Ack. Dateiinhalte werden erst
 bei Zugriff geladen, bleiben aber vor Nutzung zu prüfen. Middleware darf weder
-die Signaturprüfung noch Settlement umgehen; Details in § 14.3.
+die Signaturprüfung noch Settlement umgehen; Details in § 14.3. [geändert]
 
 Der Konnektor kennt keine Anwendungs-DTOnamen oder Callbacks. Seine
-vorgeschlagenen primitiven Operationen sind `capabilities(): CapabilitySet`,
+vorgeschlagenen primitiven Operationen sind `ensureTopology(TopologyDefinition, bool $autoCreate): void`,
 `publish(OutboundFrame): TransportReceipt`, `receive(ReceiveRequest): iterable`,
 `ack(DeliveryToken): void`, `release(DeliveryToken, RetryOptions): void` und
 `close(): void`. `receive` respektiert Timeout/Stop und liefert `InboundFrame`
 mit Routingkontext und Receipt; nackte Receipts gelangen nie in Nachrichten.
-Ungültige oder bereits erledigte Receipts erzeugen eine Settlement-Exception.
+Ungültige oder bereits erledigte Receipts erzeugen eine Settlement-Exception. [geändert]
 
 Ein `MessageSecurityInterface` bietet `protect(string $envelopeBytes,
 SecurityContext $context): ProtectedFrame` und `verify(ProtectedFrame $frame,
@@ -167,178 +161,76 @@ Ein Provider kann auch verschlüsseln; HMAC allein tut dies nicht.
 
 ## § 4 Verbinden und DSN-Factory
 
-[Vollständige Beispiele: 01-connect.php](../../examples/api-draft/01-connect.php).
-Der normale Einstieg erzeugt unmittelbar das zentrale Objekt; die Varianten
-sind Alternativen, nicht mehrere benötigte Verbindungen:
+[01-connect.php](../../examples/api-draft/01-connect.php) zeigt die Varianten.
+Der Konstruktor verbindet sofort, einmal pro Prozess; `close()` gibt Ressourcen
+idempotent frei. `stop()` beendet nur den Worker-Loop. Teilweise geöffnete
+Ressourcen werden bei Fehlern geschlossen. Ein Adapter gehört exklusiv einem MQ. [neu]
 
 ```php
-use Phore\MessageQueue\PhoreMQ;
-
-$mq = new PhoreMQ('redis://localhost:6379/0', $options);
-// Oder einen bereits konfigurierten Connector injizieren:
-$mq = new PhoreMQ($connector, $options);
-// Auch mit benannten Argumenten:
-$mq = new PhoreMQ(connection: $dsn, options: $options);
-
-// Gleichwertige Alternative, etwa im DI-Bootstrap:
-$factory = new ConnectionFactory();
-$mq = $factory->connect($dsn, $options);                   // PhoreMQ
-$mq = $factory->fromConnector($connector, $options);       // PhoreMQ
-$mq = $factory->fromAttributes(LocalConnection::class, $options); // PhoreMQ
+$mq = new PhoreMQ($dsn, $options);
+$mq = new PhoreMQ(new RabbitMQConnector($dsn), $options);
+$mq = (new ConnectionFactory())->connect($dsn, $options);
 ```
 
-Vorgeschlagene öffentliche Erzeugungssignaturen (Deklarationsauszug,
-keine Implementierung):
+Diese Zeilen sind Alternativen. Die Factory ist ein einfacher Konstruktor-Helfer;
+keine Provider-Registry, keine Verbindungsattribute und keine dynamische Auswahl.
+`PhoreMQ implements MessageQueueInterface` hat weiterhin den Konstruktor
+`__construct(string|ConnectorInterface $connection, ?ConnectionOptions $options = null)`.
+Ein String wird ausschließlich als RabbitMQ-AMQP-Verbindung ausgewertet.
+Direkte Injektion bleibt für die Interface-Grenze und Tests erhalten; sie umgeht
+weder Codec, Security noch Middleware. Weitere Implementierungen werden nicht geliefert. [neu]
 
-```php
-// Phore\MessageQueue\PhoreMQ implements MessageQueueInterface
-public function __construct(
-    string|ConnectorInterface $connection,
-    ?ConnectionOptions $options = null,
-);
-
-// ConnectionFactory
-public function connect(string $dsn, ?ConnectionOptions $options = null): PhoreMQ;
-public function fromConnector(ConnectorInterface $connector, ?ConnectionOptions $options = null): PhoreMQ;
-public function fromAttributes(string $class, ?ConnectionOptions $options = null): PhoreMQ;
-```
-
-`ConnectorInterface` liegt unter `Phore\MessageQueue\ConnectorInterface`.
-Es gibt genau eine Verbindungsangabe: String bedeutet DSN, ein Objekt muss
-das Connector-Interface implementieren. Host, Port und Broker-Credentials
-kommen aus DSN oder Connector-Konfiguration; Schema, Security, Routing,
-Middleware, RPC, Health und Dateispeicher aus `ConnectionOptions`. Sämtliche
-Einstellungen werden damit beim Erzeugen übergeben. Es gibt keine parallelen
-DSN-/Connector-Felder im Optionsobjekt, keine später notwendigen Setter und
-kein zusätzliches `connect()` auf dem MQ-Objekt.
-
-`null` bedeutet ein frisches Optionsobjekt mit denselben dokumentierten
-Defaults für alle Erzeugungswege. Environment und externe Secret-Stores werden
-nicht implizit gelesen; der file-Adapter verwaltet ausschließlich seinen
-dokumentierten lokalen Schlüssel im gewählten Root. Erforderliche Security-/
-Provider-Konfiguration muss für Netzwerkadapter weiterhin
-explizit vorliegen; das lokale file-Profil aus § 4.1 liefert dokumentierte
-Entwicklungsvorgaben; fehlende Konfiguration wird nicht durch unsichere Defaults
-ersetzt. Konfiguration wird beim Erzeugen validiert und als Snapshot verwendet;
-spätere Mutation des Optionsobjekts ändert das laufende MQ nicht. Explizit
-zustandsbehaftete injizierte Dienste wie `HealthState` bleiben dagegen geteilt. [geändert]
-
-Konstruktor und Factory bauen die Verbindung sofort mit begrenztem
-Verbindungstimeout auf. Erfolgreiche Rückkehr liefert ein verwendbares
-`PhoreMQ`; sie bestätigt noch keine fremden Listener oder nachrichtenspezifische
-Bereitschaft (dafür `check`). Beide Wege werfen dieselben Konfigurations-,
-DSN-, Verbindungs- und Auth-Exceptions aus § 11. Teilweise geöffnete eigene
-Ressourcen werden bei einem Fehler freigegeben. Kein verstecktes Lazy-Connect
-mit erst beim ersten Publish auftretendem initialem Verbindungsfehler.
-
-Eine interne gemeinsame Initialisierung löst DSNs auf, validiert Optionen
-und bindet Connector und Dienste genau einmal. Die Factory delegiert an
-diesen Erzeugungsweg; der Konstruktor ruft nicht rekursiv die öffentliche
-Factory auf. Direkte Connector-Injektion umgeht ausschließlich die DSN-
-Auflösung, niemals Security, Codec, Middleware oder Capability-Prüfungen.
-Die Factory gibt das `PhoreMQ` selbst zurück, keinen zusätzlichen Wrapper.
-Anwendungscode kann für austauschbare Abhängigkeiten weiterhin gegen
-`MessageQueueInterface` typisieren.
-
-Ein MQ-Objekt wird einmal je Verbindung und Prozess erzeugt und für alle
-zugehörigen Topics, Registrierungen, RPC und Checks wiederverwendet; kein
-globaler Singleton. `close()` ist idempotent und schließt die zugehörigen
-Transportressourcen, `stop()` beendet nur den Worker-Loop. Ein an `PhoreMQ`
-übergebener Connector steht exklusiv unter dessen Lebenszyklusverwaltung,
-auch beim gescheiterten Aufbau; er darf nicht gleichzeitig in ein zweites
-MQ-Objekt injiziert werden. Für geteilte In-Memory-Daten erhält jedes MQ einen
-eigenen Connector am selben `InMemoryBroker`. Separate RPC-/Health-Verbindungen
-bleiben bei den in §§ 13 und 16 beschriebenen Laufzeitanforderungen nötig.
-
-`fromAttributes` liest genau eine lokal angegebene Klasse mit
-`#[QueueConnection(dsn: ...)]`; kein automatisches Scannen des Dateisystems.
-Die gemeinsame DSN-Auswertung verwendet eine Schema-Allowlist und erzeugt
-niemals beliebige PHP-Klassen aus URL-Inhalten. Eigene Provider können lokal
-an der Factory über `registerConnectorFactory(scheme, factory)` registriert
-werden. Diese Registrierung verändert keine globale Registry: der einfache
-Konstruktor kennt nur die freigegebenen Standard-Schemes; für eigene Schemes
-nutzt man die konfigurierte Factory oder injiziert den Connector direkt.
-Unbekannte Schemes/Optionen werden in beiden Wegen abgelehnt.
-
-Vorgesehene spätere Contract-Tests: gleicher konkreter Rückgabetyp und
-Funktionsumfang, gleiche Defaults/Exceptions/Sicherheitskette, einmaliger
-Verbindungsaufbau, Ressourcenfreigabe bei Teilfehlern, exklusives Connector-
-Ownership und idempotentes `close`. In diesem PR bleibt dies API-Entwurf.
-
-| Vorgeschlagene DSN | Bedeutung |
+| DSN | Bedeutung |
 |---|---|
-| `redis://user:password@host:6379/0?prefix=app` | Redis Streams, ACL-Zugang; `/0` ist Datenbank |
-| `rediss://user:password@host:6380/0` | Redis über TLS mit Zertifikatsprüfung |
-| `redis://:password@host:6379/0` | Redis-Passwort ohne ACL-Benutzer |
-| `redis+unix:///run/redis/redis.sock?db=0` | Redis-Server über Unix-Socket, weiterhin Redis-Protokoll |
-| `file:///tmp/phore-mq-demo` | Geplanter lokaler Entwicklungsadapter mit SQLite-Datei, Reply-/Failure-/Attachment-Store; Details § 4.1 [neu] |
-| `memory://` | Isolierter In-Memory-Broker je MQ-Erzeugung |
-| `unix:///run/user/1000/phore-mq.sock` | Eigenes lokales MQ-Protokoll, benötigt separaten Dev-Broker |
-| `sqs://eu-central-1/123456789012` | Geplanter Queue-Adapter; logische Topics per Routingtabelle auf Queue-URLs abbilden |
-| `sns+sqs://eu-central-1/123456789012` | Geplanter Topic-Fan-out; SNS-ARNs und Subscription-Queues aus Routingtabelle |
-| `azure-servicebus://namespace.servicebus.windows.net` | Geplanter Service-Bus-Adapter mit Topic-/Subscription-Bindings |
-| `amqp://user:password@host:5672/vhost` | Geplanter RabbitMQ-Adapter; TLS über `amqps` |
+| `amqp://demo:demo@127.0.0.1:5672/demo` | Lokaler Broker, Namespace `demo` |
+| `amqps://user:password@mq.example.org:5671/app` | TLS mit Zertifikats-/Hostprüfung, Namespace `app` [neu] |
 
-Diese Schemes sind Library-Konventionen, keine Zusage bereits vorhandener
-Treiber. Benutzername, Passwort und Token vor `@` werden einmal percent-dekodiert;
-`@` im Passwort muss `%40` sein. Port, IPv6, Pfad, doppelte Query-Parameter
-und Optionswerte werden strikt geprüft. Fehler/Logs redigieren Credentials.
-Ein einzelner Key lässt sich für passende Anbieter als Passwort transportieren;
-Cloud-Adapter bevorzugen explizit injizierte Credential-Provider für temporäre
-Tokens und Managed Identity. Kein implizites Lesen von Environment-Variablen.
-Broker-Zugangsdaten und HMAC-Shared-Secret sind getrennte Einstellungen.
+DSN-Bestandteile werden einmal percent-dekodiert; `@` im Passwort ist `%40`,
+der Namespace `/` wird als `/%2F` dargestellt. Ungültige Ports, Schemes,
+Query-Optionen oder Pfade werden abgelehnt. Fehlerausgaben redigieren Credentials.
+Kein Environment-Zugriff und keine automatische Secret-Erzeugung. Die
+Security-Policy muss explizit vorliegen; eine reine DSN ohne erforderliche
+Optionen schlägt früh mit `InvalidConfigurationException` fehl. [neu]
 
-Attribute enthalten höchstens lokale Beispiel-DSNs oder Verbindungsnamen,
-keine produktiven Secrets. Für produktive Deployment-Konfiguration ist die
-programmatische Konstruktor-/Factory-Konfiguration vorzuziehen.
+`ConnectionOptions` bündelt `autoCreate` (Standard false), den expliziten
+`managementUrl` für Topologieprüfungen, `maxInFlight`
+(Standard 1, positive Ganzzahl), Security, Registry, optionale Schema-Bridge,
+RPC, Health, Middleware und optionalen PayloadStore. Konfiguration wird als
+Snapshot übernommen; bewusst geteilte Zustandsobjekte wie `HealthState`
+bleiben geteilt. Unbekannte Optionen sind Fehler. [neu]
+
+`ConnectionOptions::fromArray(array $values, ?ConnectionOptions $overrides = null)`
+ist ein geplanter Konfigurationshelfer, keine existierende Implementierung.
+Er versteht ausschließlich dokumentierte Werte: `security.mode=unsigned`
+wählt explizit die unsignierte Demo-Policy, `rpc.enabled` und `rpc.replyNamespace`
+den Rückkanalmodus aus § 13.1. Keine Klassennamen oder ausführbarer Code aus JSON.
+Explizit gesetzte Override-Felder ersetzen die entsprechenden Basiswerte;
+ausgelassene Felder behalten sie. Objekt-Abhängigkeiten werden nur programmatisch
+injiziert. Die optionale Schema-Bridge wird bei installiertem `phore/schema`
+verwendet; andernfalls scheitert benötigte DTO-Hydration früh. [neu]
 
 ### § 4.1 Kurzer lokaler Einstieg in den Beispielen
 
-Die Beispiele 02–10 verwenden `new PhoreMQ('file:///tmp/phore-mq-demo')`.
-`file` ist ein hier neu vorgeschlagener lokaler Entwicklungsadapter, noch
-keine vorhandene Funktion. Er speichert die Queue transaktional in SQLite
-unter dem angegebenen Root; `ext-pdo_sqlite` ist erforderlich. Alle Prozesse
-eines Demos teilen denselben Root. Unabhängige Demos verwenden frische Roots,
-da Subscriptions, Backlog und Fehler Neustarts überleben. Redis Streams bleibt
-der erste produktive Adapter; kein NFS-, Netzwerk- oder Multi-Host-Betrieb mit
-file und keine Gleichsetzung seiner Last-/Timing-Eigenschaften mit Redis. [neu]
+[config/message-queue.json](../../config/message-queue.json) ist die gemeinsame
+Quelle für Verbindung, Optionswerte und deklarierte fachliche Topologie.
+[connection.php](../../examples/api-draft/connection.php) lädt diese Datei
+explizit. Die Beispiele erzeugen weiterhin ein einzelnes `PhoreMQ`: [neu]
 
-Dieses explizit gewählte lokale Profil provisioniert Queue/Subscriptions,
-FailureStore, Attachment-Store und pro MQ-Instanz einen zufällig eindeutigen
-RPC-Rückkanal im eigenen Root. Antworten sind nur an intern registrierte
-logische Reply-Ziele dieses Roots zulässig; niemals an beliebige Dateipfade.
-Es aktiviert die Schema-Bridge bei installiertem `phore/schema`; wenn eine
-benötigte Bridge fehlt, bleibt es bei `MissingDependencyException`. Der
-Konstruktor installiert keine Pakete und liest keine Environment-Variablen.
-Beispiel 02 ergänzt nur sein Klassenmapping, 06 seine Middleware und 09 seine
-Health-Definitionen. Solche fachlich relevanten Optionen bleiben sichtbar.
-Explizite Optionswerte überschreiben Profilvorgaben; ausgelassene Felder
-behalten die lokalen Vorgaben, auch in partiellen RPC-/Health-Optionsobjekten. [neu]
+```php
+$mq = new PhoreMQ(...demoConnection());
+```
 
-Das Root wird nur als privates Verzeichnis desselben OS-Benutzers verwendet
-(Verzeichnis 0700, Dateien 0600); fremde Besitzer, unsichere Rechte und
-Symlink-Pfade werden abgelehnt statt still übernommen. Ein kryptografisch
-zufälliger HMAC-Key wird bei Erstinitialisierung atomar exklusiv angelegt und
-persistent gemeinsam verwendet, nicht pro Prozess ersetzt. Alle Frames
-verwenden die bestehende Signaturprüfung. Das ist ausschließlich Vertrauen
-zwischen lokalen Prozessen desselben Benutzers, keine Dienst-/Mandanten-
-Identität. Diese file-spezifische Erzeugung ersetzt keine Secret-Konfiguration
-bei Redis oder anderen Netzwerkadaptern. [neu]
+`demoConnection()` ist nur eine Beispiel-Hilfsfunktion, kein neuer Library-Aufruf.
+Sie liefert DSN und Optionen; spezifische Optionen können ergänzt werden.
+Die Demo ist ausdrücklich unsigniert und nur für den isolierten lokalen Broker.
+Für produktive Dienste werden eigene Credentials, TLS und die HMAC-Policy
+konfiguriert. Broker-Passwort und Signierschlüssel sind verschiedene Werte.
+Die Demo richtet pro Client einen eigenen Rückkanal ein. Es gibt keinen
+impliziten Dateispeicher; Beispiel 04 verlangt ihn ausdrücklich vom Aufrufer. [neu]
 
-Claims, Versuchszähler, verzögerte Freigabe und Settlement müssen per SQLite-
-Transaktion konsistent sein; Handler laufen außerhalb der DB-Transaktion.
-Lease-Tokens verhindern Settlement durch veraltete Worker, nach Prozessabbruch
-können Leases wieder aufgenommen werden. At least once, Idempotenz, begrenztes
-Polling und kurze DB-Lock-Timeouts bleiben notwendig. Fehlerablage erfolgt
-transaktional vor/mit Ack, Attachments bleiben separate Dateien mit geprüften
-Referenzen. Retention und Bereinigung gelten auch für verwaiste Rückkanäle.
-Ohne diese Eigenschaften darf der Adapter keine Durable-Capability melden. [neu]
-
-Nur Beispiel 01 zeigt vollständige Connection-Optionen und die In-Memory-/
-Unix-Alternativen. Die übrigen Dateien erklären ihr jeweiliges Thema mit dem
-kurzen Einstieg; ihre APIs bleiben Entwürfe. Spätere Contract-Tests prüfen
-insbesondere zwei Prozesse, Crash/Lease-Recovery, Retry-Zähler, atomare
-Fehlerablage, private Pfade/Key-Erzeugungsrennen und eindeutige Rückkanäle. [neu]
+Docker-Start, Einrichtung, Namensabbildung, dynamische Anlage und Bereinigung
+sind im [Setup-Guide](../setup.md) beschrieben. Bestehende Subscriptions behalten
+ihren Backlog; unabhängige Beispieldurchläufe beginnen mit einem frischen Demo-Broker. [neu]
 
 ## § 5 Senden, empfangen und Worker-Lebenszyklus
 
@@ -392,15 +284,14 @@ auch als Alias, da die API noch nicht implementiert ist.
 
 `SubscriptionOptions` enthält optional `topic` und `subscription` für die
 Callback-Kurzform sowie `type` als exakten Filter,
-`payloadClass` als lokale Zielklasse, `startAt`, `ackMode`, `retryPolicy` und
-`durability` (Default `Durability::Durable`). Memory/Unix-Tests wählen explizit
-`Durability::Volatile`; damit wird keine Haltbarkeit über Prozessneustarts
-versprochen. Fehlende angeforderte Haltbarkeit ist ein Capability-Fehler.
+`payloadClass` als lokale Zielklasse, `ackMode` und `retryPolicy`.
+Fachliche Subscriptions sind immer dauerhaft; es gibt keine Cursor-, Replay-
+oder wechselbaren Haltbarkeitsmodi.
 Ohne Typfilter muss der Array-Handler alle
-Nachrichtentypen des Topics verarbeiten können. Nicht passende Typen werden
-für diese Subscription bewusst übersprungen und bestätigt; ein separater
-Handler darf nicht dieselbe Subscription mit anderem Filter übernehmen.
-Filteränderungen benötigen eine neue Subscription oder explizite Migration.
+Nachrichtentypen des Topics verarbeiten können. Das Binding filtert bereits bei der Zustellung in die Queue. Ein dennoch
+eingehender unpassender Frame ist ein Routing-/Validierungsfehler und wird
+sicher abgelegt; kein separater Handler darf dieselbe Subscription mit anderem Filter übernehmen.
+Filteränderungen benötigen eine neue Subscription oder explizite Migration. [geändert]
 
 Die bisherigen Aufrufe `subscribe($topic, $subscription, $handler, $options)`
 bleiben gültig. Neu ist `subscribe($callback)` bzw.
@@ -438,11 +329,10 @@ Subscriptions dieses `run` zusammen; der Zähler startet je Aufruf bei null.
 Fan-out-Kopien und Wiederholungen zählen separat, auch Versuche mit behandeltem
 Retry-/Reject-/Validierungsfehler. Interne Health-/Reply-Verarbeitung, leere
 Polls und vorgeholte, noch nicht bearbeitete Zustellungen zählen nicht.
-Ein aufgrund eines Typfilters übersprungener fachlicher Delivery zählt als
-abgearbeiteter Versuch. Das Limit ist keine Anzahl erfolgreicher oder
+Ein wegen ungültigem Typ abgelehnter Delivery zählt als abgearbeiteter Versuch. Das Limit ist keine Anzahl erfolgreicher oder
 eindeutiger Geschäftsoperationen. Nach Erreichen wird keine weitere fachliche
 Zustellung verarbeitet; bereits vorgeholte Einträge bleiben sicher unbestätigt
-bzw. werden nach der bestehenden Lease-/Freigabepolicy behandelt.
+bzw. werden beim Schließen des Empfangschannels erneut verfügbar. [geändert]
 
 `maxSeconds` ist das Gesamtbudget ab Loop-Start, einschließlich Warten und
 Verarbeitung. `idleTimeoutSeconds` begrenzt eine zusammenhängende Wartephase
@@ -467,16 +357,17 @@ Fehler gehen vor Bestätigung in den FailureStore. `AckMode::Manual` erlaubt
 `context->ack()`, `context->retry(delaySeconds: ...)` oder
 `context->reject(reason: ...)`. Es ist genau eine Settlement-Entscheidung pro
 Zustellung zulässig. Rückkehr ohne Settlement gibt die Nachricht erneut frei.
-`context->extendLease(seconds: ...)` ist capabilityabhängig; lange synchrone
-Handler müssen aktiv verlängern oder eine ausreichende Lease konfigurieren.
+Eine Lease-Verlängerungsmethode gehört nicht zur API. Lange synchrone Handler
+brauchen passende Broker-Ack-Fristen und eine Laufzeit, die AMQP-Heartbeats
+bedient; eine offene TCP-Verbindung allein verhindert keinen Heartbeat-Abbruch. [geändert]
 
-Retry kann durch native Redelivery/Visibility oder Adapterlogik erfolgen.
+Retry erfolgt durch RabbitMQ-Redelivery und die in § 7 beschriebene Adapterlogik.
 Es darf keine verlustbehaftete Folge aus Ack vor erneutem Publish geben.
 Nichtatomare Kopier-vor-Ack-Schritte dürfen Duplikate erzeugen und müssen
 dies dokumentieren. Fehler im FailureStore führen zu **keinem Ack** und
 beenden den Worker mit Infrastrukturfehler. Ein Error-Observer bekommt
 sanitisierte Fehlerdaten; systemische Transportfehler werden aus `run`
-geworfen statt in einer Endlosschleife verborgen.
+geworfen statt in einer Endlosschleife verborgen. [neu]
 
 ## § 6 SDK-Typen, Attribute und strukturelle Kompatibilität
 
@@ -652,58 +543,68 @@ keine Ressourcenerzeugung bei Metadatenfehlern und Cleanup bei Bindefehlern.
 Beispiel 03 zeigt die erfolgreichen Varianten und erwartete Exceptions;
 es bleibt ausschließlich API-Entwurf.
 
-## § 7 Redis-Standard und Konnektorvergleich
+## § 7 RabbitMQ-Adapter und Konfigurationsabbildung
 
-Die folgende Bewertung ist eine Designableitung aus den verlinkten
-Primärquellen, keine Aussage über bereits implementierte Adapter.
+Die öffentliche API verwendet generische Begriffe. RabbitMQ-Begriffe erscheinen
+nur im Adapter, Deployment und zur Erklärung der konkreten Abbildung. [neu]
 
-| Kandidat | Relevante Fähigkeiten | Konsequenz für dieses Paket |
-|---|---|---|
-| Redis Streams | Log, Consumer Groups, Pending-Liste, Ack, Claim verwaister Nachrichten | Standard: Stream pro Topic, Gruppe pro Subscription, eindeutiger Consumer pro Worker |
-| Redis Pub/Sub | Flüchtige Broadcasts und Patterns; at most once | Optionaler eigener Modus, kein Ersatz für dauerhafte Subscriptions |
-| Amazon SQS | Arbeitsqueue; Consumer teilen Nachrichten | `sqs` meldet nur konkurrierende Queue-Verarbeitung; zweite unabhängige Fan-out-Subscription wird abgelehnt |
-| Amazon SNS + SQS | Topic-Fan-out in getrennte Queues | Vollständiges Subscription-Modell über SNS-Topic und Queue je Subscription |
-| Azure Service Bus | Queues, Topics, dauerhafte Subscriptions und Filter | Geeigneter Cloud-Adapter; Credential-/PHP-Client-Auswahl noch prüfen |
-| RabbitMQ | Exchanges/Bindings, Queues, Consumer-Ack und Publisher Confirms | Topic auf Exchange, Subscription auf Queue; AMQP-Protokollversion ausdrücklich festlegen |
-| NATS JetStream | Persistente Streams, langlebige Consumer, Ack und Redelivery | Späterer Adapter, Core NATS nicht mit JetStream gleichsetzen |
-| In-Memory | Prozessinterne kontrollierte Zustellung | Frühes Testwerkzeug, kein Ersatz für Brokerintegrationstests |
-| file (geplanter lokaler SQLite-Adapter) | Gemeinsamer Root für lokale Prozesse, Claims/Leases und Fehlerablage | Kurzer Entwicklungs-Einstieg gemäß § 4.1; kein Multi-Host-/NFS-Backend [neu] |
-| Unix-Socket | Lokaler Byte-Transport | Benötigt Dev-Broker für Routing, Gruppen und Receipts; keine Queue allein durch Socket/Semaphore |
+| Öffentlicher Begriff | RabbitMQ-Abbildung im ersten Adapter |
+|---|---|
+| Namespace | Virtual Host aus dem DSN-Pfad |
+| Topic `users` | Dauerhafte Topic-Exchange `phore.topic:users` |
+| Typ / Subject `user.created.v1` | Exakter Routing Key; keine eigene Ressource |
+| Subscription `audit-users` | Dauerhafte Quorum Queue `phore.sub:users:audit-users` |
+| Subscription ohne Typfilter | Binding mit `#`; empfängt alle Typen dieses Topics |
+| Subscription mit `type` | Binding mit genau diesem Typ; keine öffentliche Wildcard-Sprache |
+| `maxInFlight` | Consumer-Prefetch; keine Zahl parallel ausgeführter PHP-Callbacks |
+| Fehlerablage | Quorum Queue `phore.failure:users:audit-users` je Subscription [neu] |
 
-Redis benötigt getrennte Empfangs-/Publish-Verbindungen, begrenztes Blocking
-und eindeutige Consumer-IDs. `XREADGROUP` liefert neue Nachrichten; Pending-
-Recovery über `XAUTOCLAIM` und Ack über `XACK`. Ein Ack darf den Stream-Eintrag
-nicht global löschen, solange andere Subscriptions ihn brauchen.
-Aufbewahrungsregeln berücksichtigen langsame Gruppen und Pending-Einträge;
-aggressives `MAXLEN` kann noch benötigte Daten entfernen. Redis-Persistenz,
-Replikation und Eviction-Policy sind Betriebsentscheidungen und bestimmen
-die tatsächliche Haltbarkeit. Der Adapter muss verlorene/ge-trimmte Pending-
-Einträge sichtbar melden und darf sie nicht als erfolgreich verarbeitet werten.
+Namen bestehen aus einem führenden Buchstaben/Unterstrich und höchstens 99
+weiteren Buchstaben, Ziffern, Unterstrichen, Punkten oder Bindestrichen.
+Doppelpunkte in physischen Namen sind dadurch eindeutige Trenner. Reservierte
+interne Namen beginnen mit `_phore`; Anwendungstopologien verwenden sie nicht. [neu]
 
-`capabilities()` beschreibt mindestens durableSubscriptions, competingConsumers,
-acknowledgements, retry, deadLetter, leaseExtension, replay, delayedPublish,
-ordering, filtering und maxFrameBytes. Zusätzliche Optionen werden nur bei
-Unterstützung akzeptiert; etwa Delay, Priorität, FIFO und Transaktionen sind
-keine universellen Versprechen. Transportgrößen werden inklusive Envelope,
-Signatur, Encoding und Anbieter-Metadaten bewertet, nicht allein am Payload.
+`publish` verwendet persistente Frames, Publisher Confirms und `mandatory`.
+Eine nicht routbare Nachricht wirft `UnroutableMessageException`; eine positive
+Publish-Bestätigung beweist keine Handler-Bereitschaft und nicht die Existenz
+aller fachlich erwarteten Subscriptions. Fachliche Bindungen müssen vor Publish
+existieren. Eine Exchange selbst speichert keinen Backlog. [neu]
 
-### § 7.1 Was andere PHP-Abstraktionen bereits vorsehen
+`subscribe` validiert/anlegt Exchange, Queue und Binding gemäß `autoCreate`.
+Identische Definitionen sind wiederholbar. Abweichende Typfilter, Queue-Eigenschaften
+oder Namensbindungen werfen `TopologyConflictException`; kein automatisches
+Löschen oder Umbauen gefüllter Queues. `autoCreate: false` prüft nur.
+Eine passive AMQP-Queue-Prüfung beweist nicht die vollständige Binding-Konfiguration;
+strikte Prüfung nutzt die über `managementUrl` konfigurierte Management-API
+mit passenden Rechten. Deren Zugang verwendet die expliziten Verbindungscredentials;
+produktive Endpunkte müssen HTTPS mit Zertifikatsprüfung verwenden. Keine
+ableitende URL-Heuristik und kein Fallback nach fehlgeschlagener Prüfung. Ohne Prüfmöglichkeit folgt
+`TopologyVerificationException`, keine Behauptung erfolgreicher Vollprüfung. [neu]
 
-Symfony Messenger zeigt DSN-Transports, Handler-Attribute, Envelopes/Middleware,
-Retry/Failure-Transports, Worker-Limits, In-Memory-Tests und optionale
-Message-Signierung. PHP Enqueue zeigt Connection-Factory, Context,
-Producer/Consumer und explizite Acknowledgements. Daraus übernehmen wir eine
-kleine öffentliche API, separate Transportverträge und einen klaren
-Fehler-/Worker-Lebenszyklus. Das Paket wird dadurch kein Framework und
-benötigt weder Symfony-Servicecontainer noch automatische Handler-Suche.
+Retry-Veröffentlichungen gehen ausschließlich über ein internes Ziel zurück
+an dieselbe Subscription, niemals erneut über die fachliche Topic-Exchange.
+Verzögerung erfolgt mit internen Wartequeues fester TTL und Rückführung an die
+Zielqueue. Erst nach bestätigtem Retry-/Fehler-Publish wird das Original bestätigt.
+Crash-Fenster dürfen Duplikate, aber kein vorzeitiges Erfolgs-Ack erzeugen.
+Der unveränderte signierte fachliche Frame bleibt erhalten; Versuchszähler
+liegen in vertrauenswürdig verwalteten Transportmetadaten (§ 11.1). [neu]
+
+Quorum Queues erhalten bei der Einrichtung bestätigtes Dead-Lettering mit
+`reject-publish` und einem eigenen Fehlerziel. Der automatische Delivery-Limit-
+Default wird explizit deaktiviert; die begrenzte Handler-Retry-Policy verwaltet
+PhoreMQ. Transportabbrüche können zusätzliche Zustellversuche auslösen und
+werden nicht als exakte Zahl bereits gestarteter Handler interpretiert.
+Die Fehlerqueue erhält keine automatische Ablaufzeit. Betriebsseitige Limits
+werden bewusst gesetzt und überwacht; die Demo ist kein Hochverfügbarkeitscluster. [neu]
+
+### § 7.1 Was andere PHP-Abstraktionen bereits vorsehen [gelöscht]
 
 ## § 8 Transparente Sicherheit
 
 Default-Provider bei konfiguriertem Shared Secret ist **HMAC-SHA-256** mit
 Key-ID. Ein bloßer SHA-Hash mit angehängtem Secret ist kein geeignetes
 Signaturverfahren. Verbindungskonfiguration verlangt eine explizite Policy:
-HMAC oder bewusstes `UnsignedSecurity` für isolierte Tests; die persistente
-lokale Key-Erzeugung des file-Profils ist in § 4.1 geregelt. Kein pro Prozess
+HMAC oder bewusstes `UnsignedSecurity` für isolierte Tests (§ 4.1). Kein pro Prozess
 neu erzeugtes Wegwerf-Secret, fest eingebauter Schlüssel oder stillschweigend
 fehlendes Secret. Ein Empfänger mit
 HMAC-Policy weist unsignierte Nachrichten immer zurück. [geändert]
@@ -730,9 +631,9 @@ Shared Secret ist keine individuelle Absenderidentität.
 
 Zeitprüfung toleriert begrenzte Uhrabweichung und lehnt zukünftige oder
 abgelaufene Nachrichten ab. Ein optionales maximales Alter muss zum gesamten
-Queue-Backlog, Retry- und Replay-Fenster passen; kein pauschales Fünf-Minuten-
+Queue-Backlog und Retry-Fenster passen; kein pauschales Fünf-Minuten-
 Limit für dauerhafte Queues. Redelivery behält ID, Bytes und ursprüngliche
-Signatur. Broker-Versuchszähler gehören nicht zum unveränderlichen Envelope.
+Signatur. Broker-Versuchszähler gehören nicht zum unveränderlichen Envelope. [geändert]
 
 Signierung verhindert Replay allein nicht. Eine optionale Inbox speichert
 `(audience, subscription, messageId)` mit Zuständen processing/completed und
@@ -740,7 +641,7 @@ begrenzten Leases. Erst erfolgreicher Abschluss markiert completed;
 fehlgeschlagene Versuche dürfen erneut verarbeitet werden. Ein früher globaler
 Nonce-Verbrauch würde legitime Wiederholungen und andere Subscriptions
 blockieren. Atomizität zwischen fachlicher DB-Änderung und Inbox erfordert
-Anwendungs-/Transaktionsintegration, nicht nur Redis-Deduplication.
+Anwendungs-/Transaktionsintegration, nicht nur eine transportseitige Duplikaterkennung. [geändert]
 
 Ungültige Signaturen werden ohne Callback quarantänisiert oder nach expliziter
 Policy verworfen, niemals endlos wiederholt. Quarantäne speichert begrenzte
@@ -754,9 +655,7 @@ Broker-ACLs und sicherer Dateispeicher bleiben zusätzlich erforderlich.
 [Dateibeispiel: 04-files-and-local.php](../../examples/api-draft/04-files-and-local.php).
 Die Anwendung übergibt `Attachment::fromPath(...)` oder einen Stream;
 die Queue verschickt einen verifizierbaren Deskriptor. Ein konfigurierter
-`PayloadStoreInterface` übernimmt Upload und spätere Auflösung. Dieses
-Claim-Check-Verfahren ist auch bei AWS/Azure beschrieben. Binärdaten werden
-nicht unbeschränkt base64-kodiert in Redis/SQS geschoben.
+`PayloadStoreInterface` übernimmt Upload und spätere Auflösung. Binärdaten werden nicht unbeschränkt base64-kodiert in die Queue geschrieben. [geändert]
 
 Der Deskriptor enthält einen opaken Store-Key, Größe, SHA-256, MIME-Typ,
 Dateiname und Lebensdauer. Er ist Teil der Signatur; der Digest allein ist
@@ -775,41 +674,28 @@ Lifecycle-Bereinigung statt verteilter Referenzzählung vorgeschlagen.
 Verwaiste Uploads werden nach einer Sicherheitsfrist bereinigt. Ein zu früh
 abgelaufenes oder fehlendes Objekt erzeugt `AttachmentUnavailableException`.
 
-Der lokale FileStore funktioniert nur bei gemeinsam zugänglichem Dateisystem;
-für mehrere Hosts braucht es etwa S3 oder Azure Blob. Begrenzungen gelten
+Der injizierte Dateispeicher muss für Sender und Empfänger erreichbar sein;
+RabbitMQ speichert ausschließlich die Referenz, keine automatisch verwaltete ZIP-Datei. Begrenzungen gelten
 für Dateigröße, Zahl der Attachments, Downloads und temporären Speicher.
 Automatisches Offloading beliebig großer JSON-Bodies sowie Chunking mit
 Reassembly sind spätere Erweiterungen und kein impliziter Bestandteil von
-`publish`. Ohne Store oder bei zu großem Frame folgt eine eindeutige Exception.
+`publish`. Ohne Store oder bei zu großem Frame folgt eine eindeutige Exception. [neu]
 
-## § 10 Lokale Entwicklung: Memory, Redis-Socket und Dev-Broker
+## § 10 Lokale Entwicklung mit RabbitMQ
 
-Die konkreten Verbindungsbeispiele stehen zentral in
-[01-connect.php](../../examples/api-draft/01-connect.php); der neue file-Einstieg
-ist in § 4.1 beschrieben. [geändert]
+Die Entwicklung verwendet denselben Adapter wie der spätere Betrieb.
+[compose.yaml](../../deployment/rabbitmq/compose.yaml) startet einen einzelnen
+RabbitMQ-Knoten mit Management-Plugin und Demo-Namespace. Ports sind nur an
+Loopback gebunden. Das benannte Volume überlebt Neustarts; `down -v` entfernt
+gezielt den temporären Demo-Zustand. Ein einzelner Quorum-Knoten besitzt keine
+Ausfallredundanz. Anleitung und ausführbare Befehle: [Setup](../setup.md). [neu]
 
-`memory://` durchläuft denselben Codec, dieselbe Signierung und dieselbe
-Schema-Bridge. Es kopiert serialisierte Nachrichten, keine veränderbaren
-Objektreferenzen. Zwei unabhängig erstellte Memory-Verbindungen teilen keinen
-Broker; für Sender/Empfänger innerhalb eines Tests wird derselbe explizite
-`InMemoryBroker` an zwei Konnektoren injiziert. Deterministische Clock und
-kontrollierte Redelivery sind nützliche spätere Test-Hooks.
-
-`redis+unix://` ist die einfache lokale Variante mit echter Redis-Semantik.
-`unix://` ist dagegen ein eigener Konnektor: Ein separat gestarteter
-`UnixDevBroker` verwaltet Topics, Subscriptions, konkurrierende Consumer und
-volatile Pending-Receipts. Vorgeschlagenes Protokoll: begrenzte längenpräfixierte
-Frames, Version, Request-ID, Publish, Subscribe, Delivery, Ack und Release;
-partielle Reads/Writes, Backpressure und Disconnect müssen behandelt werden.
-Nach Disconnect wird nicht bestätigte Arbeit erneut angeboten, solange der
-Broker lebt; nach Broker-Neustart ist dessen Arbeitsspeicher verloren.
-
-Eine Semaphore koordiniert Zugriffe oder signalisiert Zustände, speichert
-aber weder Nachrichten noch Abonnements. Sie ist höchstens ein internes
-Hilfsmittel. Socketdatei und Elternverzeichnis brauchen passende Zugriffsrechte;
-kein weltbeschreibbarer gemeinsamer Pfad, kein Überschreiben fremder Sockets.
-Windows-Unterstützung, persistentes Spooling, Clustering und ein eigener
-produktiver Broker gehören nicht zur ersten lokalen Implementierung.
+[setup.py](../../deployment/rabbitmq/setup.py) übersetzt die neutrale
+Konfigurationsdatei in RabbitMQ-Deklarationen über dessen HTTP-Management-API.
+Es benötigt nur Python 3, keine PHP-Library. `--dry-run` prüft und zeigt die
+Operationen ohne Verbindung. Das Skript legt nichts durch Publish an und führt
+keine Handler aus. Es löscht keine Ressourcen; entfernte Konfigurationseinträge
+entfernen daher keine existierenden Queues. Migrationen sind explizite Vorgänge. [neu]
 
 ## § 11 Exceptions und Diagnose
 
@@ -823,8 +709,9 @@ Payload, Secret, signierter Download-Link oder Receipt im normalen Fehlertext.
 | Exception | Beispiel / Behandlung |
 |---|---|
 | `InvalidDsnException` | Ungültiger Port oder unbekannte Option; Konfiguration korrigieren |
-| `UnsupportedConnectorException` / `MissingDependencyException` | Treiber oder Schema-Bridge fehlt; vor Workerstart abbrechen |
-| `UnsupportedCapabilityException` | Dauerhafter Fan-out mit reinem SQS oder Replay ohne Unterstützung |
+| `MissingDependencyException` | RabbitMQ-Client oder benötigte Schema-Bridge fehlt; vor Workerstart abbrechen |
+| `TopologyConflictException` / `TopologyVerificationException` | Deklaration widerspricht bestehender Topologie oder kann nicht vollständig geprüft werden |
+| `UnroutableMessageException` | Keine passende Subscription für die veröffentlichte Nachricht |
 | `ConnectionException` / `AuthenticationException` | Netzwerkproblem retrybar; falsche Credentials nicht endlos wiederholen |
 | `PublishException` | Annahme fehlgeschlagen oder unbekannt; `outcome` = rejected/unknown |
 | `ReplyNotEnabledException` | await auf ohne Rückkanal gesendeter Nachricht; kein nachträgliches Senden |
@@ -837,15 +724,15 @@ Payload, Secret, signierter Download-Link oder Receipt im normalen Fehlertext.
 | `PayloadTooLargeException` / `PayloadStoreRequiredException` | Brokergrenze überschritten oder Dateispeicher fehlt |
 | `AttachmentUnavailableException` / `AttachmentIntegrityException` | Storefehler ggf. retrybar; falscher Digest endgültig |
 | `RetryableMessageException` / `RejectMessageException` | Explizite fachliche Wiederholung bzw. endgültige Ablehnung |
-| `SettlementException` / `LeaseLostException` | Ack fehlgeschlagen/Lease verloren; Duplikate berücksichtigen |
-| `FailureStoreException` | Sichere Fehlerablage fehlgeschlagen; kein Ack, Worker abbrechen |
+| `SettlementException` | Ack fehlgeschlagen oder Delivery-Channel geschlossen; Duplikate berücksichtigen |
+| `FailureStoreException` | Sichere Fehlerablage fehlgeschlagen; kein Ack, Worker abbrechen [geändert] |
 
 Validierung meldet konkrete Pfade und erwartete Typen, aber keine sensiblen
-Istwerte. Ein unbekannter Typ wird bei explizitem Filter übersprungen;
-trifft er einen Handler, der ein registriertes Schema verlangt, ist dies ein
-Mappingfehler. Nicht explizit klassifizierte Handler-Exceptions werden
+Istwerte. Nicht passende Typen werden im Binding gefiltert. Ein dennoch
+zugestellter unpassender Typ ist ein sicher abzulegender Routingfehler; fehlt
+einem Handler ein benötigtes Schema, ist dies ein Mappingfehler. Nicht explizit klassifizierte Handler-Exceptions werden
 begrenzt wiederholt und anschließend abgelegt. Syntax-/Konfigurationsfehler
-sind keine Nachrichten-Retries.
+sind keine Nachrichten-Retries. [neu]
 
 RPC ergänzt `RequestTimeoutException`, `RemoteCommandException`,
 `InvalidReplyException` und `RpcNotConfiguredException`. Die lokal vom
@@ -860,35 +747,36 @@ Command-Fehler und ändert die Settlement-Entscheidung nicht.
 direkt im Handler; [Beispiel 06](../../examples/api-draft/06-metadata-middleware.php)
 zeigt das sichere Weiterwerfen nach Diagnose. Bei Auto-Ack bedeutet eine
 Exception vor Settlement: kein Erfolgs-Ack. Die Runtime fängt behandelbare
-`Throwable`s an der Handlergrenze ab und entscheidet nach folgender Policy. [neu]
+`Throwable`s an der Handlergrenze ab und entscheidet nach folgender Policy.
 
 | Callback-Ergebnis | Standard im Entwurf |
 |---|---|
-| Normale Rückkehr | Ack nach erfolgreicher Verarbeitung [neu] |
-| `RetryableMessageException` | Begrenzter Retry mit Verzögerung; kein unendliches Erzwingen [neu] |
-| Andere unbehandelte Exception, einschließlich `TypeError` | Ebenfalls begrenzt wiederholen; nach Ausschöpfen sichere Fehlerablage und Alarm [neu] |
-| `RejectMessageException` | Sofort endgültig in die Fehlerablage, kein Retry [neu] |
-| `CommandFailedException` oder freigegebene `RemoteException` (§ 13.5) in `respond` | Bewusster fachlicher RPC-Fehler: sichere finale Antwort, danach Ack; keine technische Wiederholung [neu] |
-| Infrastrukturfehler bei Retry/Ack/FailureStore | Kein vorgetäuschter Erfolg; `run` wirft Infrastruktur-Exception, unbestätigte Nachricht bleibt wiederholbar [neu] |
+| Normale Rückkehr | Ack nach erfolgreicher Verarbeitung |
+| `RetryableMessageException` | Begrenzter Retry mit Verzögerung; kein unendliches Erzwingen |
+| Andere unbehandelte Exception, einschließlich `TypeError` | Ebenfalls begrenzt wiederholen; nach Ausschöpfen sichere Fehlerablage und Alarm |
+| `RejectMessageException` | Sofort endgültig in die Fehlerablage, kein Retry |
+| `CommandFailedException` oder freigegebene `RemoteException` (§ 13.5) in `respond` | Bewusster fachlicher RPC-Fehler: sichere finale Antwort, danach Ack; keine technische Wiederholung |
+| Infrastrukturfehler bei Retry/Ack/FailureStore | Kein vorgetäuschter Erfolg; `run` wirft Infrastruktur-Exception, unbestätigte Nachricht bleibt wiederholbar |
 
 Vorgeschlagene Default-Policy: höchstens vier Versuche insgesamt, also drei
-Wiederholungen, mit 1, 2 und 4 Sekunden Verzögerung plus zufälligem Jitter von
-±10 %. `context->attempt` beginnt bei 1 und wird dauerhaft je Zustellung an
-eine Subscription geführt; Prozessneustart oder ein anderer Worker setzt den
-Zähler nicht zurück. Die Policy bleibt über `SubscriptionOptions::retryPolicy`
+Wiederholungen, mit 1, 2 und 4 Sekunden Verzögerung. Feste Wartequeues halten
+den ersten Retry-Aufbau überschaubar; frei wählbarer Jitter ist nicht vorgesehen. `context->attempt` beginnt bei 1 und wird dauerhaft je Zustellung an
+eine Subscription geführt; bestätigte Retry-Übergaben erhöhen den Zähler
+dauerhaft. Prozessneustart setzt diesen Stand nicht zurück. Ein Crash vor
+der Retry-Übergabe kann denselben Versuch wiederholen: vier Versuche sind eine
+Grenze der regulären Handler-Retry-Runden, keine Exactly-once-Ausführungszählung. Die Policy bleibt über `SubscriptionOptions::retryPolicy`
 austauschbar. Diese Defaults sind unsere Designentscheidung, keine Zusage des
 Brokers. Ein laufender Retry blockiert nicht durch sleep den ganzen Worker;
-der Job wird verzögert wieder verfügbar. [neu]
+der Job wird verzögert wieder verfügbar. [geändert]
 
 Nach endgültiger Ablehnung oder ausgeschöpften Versuchen wird zuerst der
 FailureStore sicher bestätigt, dann die Ursprungszustellung beendet. Ohne
 verfügbaren FailureStore kein Verwerfen und kein Ack; `FailureStoreException`
-beendet den Loop. Der lokale file-Adapter hat die Fehlerablage im Profil,
-andere Adapter müssen eine verfügbare Ablage konfigurieren. Fehlerdaten
+beendet den Loop. Der RabbitMQ-Adapter verwendet die zugehörige Fehlerqueue aus § 7. Fehlerdaten
 enthalten ID, Subscription, Versuchszahl, Zeit und sichere Diagnose; Payloads
 und Stacktraces sind nur in zugriffsgeschützter lokaler Ablage zulässig, nicht
 ungefiltert in Events oder Frontend-Antworten. Manuelles Redrive erfolgt erst
-nach Ursachenklärung mit erhaltenem Bezug und neuer expliziter Retry-Runde. [neu]
+nach Ursachenklärung mit erhaltenem Bezug und neuer expliziter Retry-Runde. [geändert]
 
 Bei technischen RPC-Fehlern wartet der Client über die zulässigen Retries.
 Nach endgültigem Scheitern sendet die Runtime, soweit Rückkanal und Deadline
@@ -899,19 +787,17 @@ Request-Ack bestätigt; technische Fehler dabei bleiben wiederholbar. Bei
 nicht erreichbarem Rückkanal kann stattdessen `RequestTimeoutException` beim
 Client eintreten. Für eine bekannte fachliche `CommandFailedException` oder freigegebene
 `RemoteException` ist keine technische FailureStore-Runde nötig; die sichere
-Antwort bleibt aber zu bestätigen. [neu]
+Antwort bleibt aber zu bestätigen.
 
 Ein behandelter Callback-Fehler beendet normalerweise nicht den Worker;
 andere Jobs können weiterlaufen. Middleware darf die Exception loggen und
 muss sie für korrekte Retry-/Ack-Entscheidung weiterwerfen. Prozesskill oder
-Speichermangel sind nicht zuverlässig abfangbar: fehlendes Ack und ablaufende
-Lease ermöglichen Recovery. Externe Seiteneffekte werden nicht zurückgerollt;
+Speichermangel sind nicht zuverlässig abfangbar: fehlendes Ack und das
+Schließen des Delivery-Channels ermöglichen Recovery. Externe Seiteneffekte werden nicht zurückgerollt;
 Idempotenz oder anwendungsseitige Transaktionen bleiben nötig. Ein bereits
-manuell gesetztes Ack lässt sich durch eine spätere Exception nicht widerrufen. [neu]
+manuell gesetztes Ack lässt sich durch eine spätere Exception nicht widerrufen. [geändert]
 
-Orientierung: [Symfony Messenger – Retries & Failures](https://symfony.com/doc/current/messenger.html#retries-failures)
-trennt verzögerte Wiederholungen, endgültige Fehler und Failure-Transports;
-[RabbitMQ – Acknowledgements](https://www.rabbitmq.com/docs/confirms)
+Orientierung: [RabbitMQ – Acknowledgements](https://www.rabbitmq.com/docs/confirms)
 unterscheidet Bestätigung, Requeue und Dead Letter. Unser Entwurf verbietet
 stilles Verwerfen ohne sichere Ablage und begrenzt auch ausdrücklich retrybare
 Fehler. Abruf 2026-09-12. Spätere Tests: Retry-Zählung über Neustarts, Fehlerablage
@@ -921,18 +807,17 @@ ausgefallen, Middleware schluckt/erhält Fehler, RPC-Endfehler und manuelles Ack
 
 In die Library gehören Transportvertrag, Registry, Worker-Lebenszyklus,
 Serialization, optionale Schema-Bridge, Security-/PayloadStore-Schnittstellen
-und konsistente Exceptions. Provider-SDKs werden über optionale Adapterpakete
-eingebunden; welche davon als eigene Composer-Pakete erscheinen, wird bei
-der Implementierungsplanung entschieden. SDK-Verträge lassen sich unabhängig
-von Brokerinstallationen verteilen.
+und konsistente Exceptions. Der RabbitMQ-Adapter gehört zur ersten Implementierung; seine PHP-AMQP-
+Abhängigkeit wird bei der Implementierungsplanung festgelegt. SDK-Verträge lassen sich unabhängig
+von Brokerinstallationen verteilen. [geändert]
 
 Nicht in den Kern gehören fachliche DTOs, Business-Workflows, vollständige
-Job-Scheduler, langfristige Workflow-/RPC-Ergebnisarchive, Broker-Provisionierung über Cloud-IAM,
+Job-Scheduler, langfristige Workflow-/RPC-Ergebnisarchive, Cloud-Provisionierung,
 Admin-UIs, Virenscanner, ZIP-Entpackung, PGP-Keyverwaltung oder eine eigene
 verteilte Dateispeicherplattform. Erweiterungspunkte dürfen diese verbinden,
 ohne den Grundvertrag damit zu belasten. Keine scheinbar universellen
 Transaktionen, Prioritäten oder Exactly-once-Zusagen. Der nun beauftragte
-RPC-Umfang bleibt eine optionale Request/Reply-Erweiterung gemäß § 13.
+RPC-Umfang bleibt eine optionale Request/Reply-Erweiterung gemäß § 13. [geändert]
 
 Globale Lock-/Konsensverfahren gehören nicht in die MQ-Library. § 15 zeigt
 Broadcast und das Einsammeln von Lock-Bestätigungen; die tatsächlichen
@@ -944,18 +829,14 @@ unabhängige Subscriptions versus Worker-Gruppe, Redelivery nach Crash,
 Ack-Verlust, unbekanntes Publish-Ergebnis, lokale DTOs mit anderem Namespace,
 verschachtelte Strukturen/required/null/zusätzliche Felder, manipulierte
 Signaturen samt Metadaten, Rotation, Backlog-Zeitprüfung, fehlgeschlagene
-Dateiprüfung, konkurrierende Consumer und Socket-Teilverarbeitung. Dieser
-Entwurfs-PR fügt keine Laufzeitimplementierung oder Tests dafür hinzu.
+Dateiprüfung, konkurrierende Consumer und Verbindungsabbrüche. Dieser
+Entwurfs-PR fügt keine Laufzeitimplementierung oder Tests dafür hinzu. [geändert]
 
 Primärquellen, abgerufen am 2026-09-12:
 
-- §§ 1, 7: [Redis Pub/Sub und Zustellgarantien](https://redis.io/docs/latest/develop/pubsub/), [XREADGROUP](https://redis.io/docs/latest/commands/xreadgroup/), [XAUTOCLAIM](https://redis.io/docs/latest/commands/xautoclaim/).
-- §§ 3, 5, 7.1, 8: [Symfony Messenger: Transports, Retry, Attribute und Signierung](https://symfony.com/doc/current/messenger.html), [PHP Enqueue Quick Tour](https://php-enqueue.github.io/quick_tour/).
-- § 7: [SNS-Fan-out an SQS](https://docs.aws.amazon.com/sns/latest/dg/sns-sqs-as-subscriber.html), [Azure Service Bus: Queues, Topics, Subscriptions](https://learn.microsoft.com/en-us/azure/service-bus-messaging/service-bus-queues-topics-subscriptions).
-- § 7: [RabbitMQ Exchanges](https://www.rabbitmq.com/docs/exchanges), [Acknowledgements und Publisher Confirms](https://www.rabbitmq.com/docs/confirms), [NATS JetStream Consumers](https://docs.nats.io/learn/jetstream/pull-consumers).
-- § 9: [AWS SQS Extended Client und S3](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-managing-large-messages.html), [Azure Claim-Check Pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/claim-check).
-- § 10: [PHP stream_socket_server](https://www.php.net/manual/en/function.stream-socket-server.php).
-- § 6.1: [phore/schema Hydrator](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/src/Hydrator/Hydrator.php), [Validator](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/src/Validator/Validator.php), [Nutzungsinfo](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/.ai-usage-info.md).
+- §§ 2–5, 7, 10: [RabbitMQ Queues](https://www.rabbitmq.com/docs/queues), [Exchanges](https://www.rabbitmq.com/docs/exchanges), [Confirms](https://www.rabbitmq.com/docs/confirms), [Quorum Queues](https://www.rabbitmq.com/docs/quorum-queues), [Management HTTP API](https://www.rabbitmq.com/docs/http-api-reference). [neu]
+
+- § 6.1: [phore/schema Hydrator](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/src/Hydrator/Hydrator.php), [Validator](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/src/Validator/Validator.php), [Nutzungsinfo](https://github.com/phore/phore-schema/blob/aa8e60ab3b371fc3503f2a7ec8e2a3a63305074c/.ai-usage-info.md). [geändert]
 
 ## § 13 RPC: Command, Rückgabewert und Begleitmeldungen
 
@@ -969,16 +850,25 @@ DTO. Ein skalarer Wert wird explizit als `['value' => ...]` verpackt.
 
 ### § 13.1 Einmalige Konfiguration und Aufruf
 
-`ConnectionOptions::rpc` nimmt `RpcConnectionOptions` entgegen. Der Client
-konfiguriert `replyTopic` und `replySubscription` einmal pro aktiver
-Client-Instanz; der Server konfiguriert eine `allowedReplyTopics`-Allowlist.
-Im lokalen Beispiel dürfen beide auf derselben HMAC-Audience arbeiten.
-Anwendungen verwenden eigene Reply-Topics je Instanz, oder einen expliziten
-zentralen Demultiplexer; konkurrierende Client-Prozesse dürfen nicht denselben
-Reply-Consumer teilen und fremde Antworten wegkonsumieren. Die Rückkanal-
-Subscription wird vor Veröffentlichung jeder antwortfähigen Nachricht
-bereitgestellt; auch das lokale Korrelationsregister existiert vor Publish,
-damit sehr schnelle Antworten nicht verloren gehen.
+`ConnectionOptions::rpc` nimmt `RpcConnectionOptions` entgegen. Bei
+`enabled: true` erzeugt der Adapter vor dem ersten antwortfähigen Publish ein
+zufällig eindeutiges Reply-Topic samt exklusiver, automatisch gelöschter Classic-Reply-Queue
+pro Client unter `replyNamespace` (Demo `_phore.rpc`). Das ist eine ausdrücklich
+aktivierte Ausnahme zur rein vorab angelegten fachlichen Topologie; passende
+Configure-/Read-/Write-Rechte für den reservierten Bereich sind erforderlich,
+auch bei `autoCreate: false`. Der Responder akzeptiert ausschließlich erlaubte
+Reply-Ziele im konfigurierten Namespace; Zugang und Identität werden zusätzlich geprüft. [neu]
+
+Der interne Reply-Consumer wird vor Publish eingerichtet, einschließlich des
+Korrelationsregisters. Er teilt seine Queue niemals mit anderen Clients.
+Der Adapter verwendet reguläre Reply-Queues, kein verlustbehaftetes Direct Reply-to.
+Replies können nach Client-Verbindungsabbruch verloren gehen; offene Aufrufe
+enden mit Verbindungsfehler oder Timeout. Dies ist kein dauerhaftes RPC-Ergebnisarchiv.
+Konfigurierbare feste `replyTopic`/`replySubscription` bleiben für einen expliziten
+zentralen Demultiplexer möglich; unabhängige Clients dürfen sie nicht gemeinsam
+als konkurrierende Consumer verwenden. Der Server kann `allowedReplyTopics`
+zusätzlich auf konkrete Ziele einschränken. Anzahl, Bytes und Lebensdauer des
+Rückkanals bleiben begrenzt. [neu]
 
 `RequestOptions` ergänzt `timeoutSeconds` (Default 30 Sekunden ab `request`,
 nicht ab `await`), `metadata`, optional `responseClass` und `onNotice`.
@@ -994,7 +884,7 @@ und einen unabhängig laufenden Responder verwenden.
 `RequestOptions::responseClass`/`onNotice` liefern lediglich die Anfangswerte
 für dieselben Await-Einstellungen. `PendingReply` entfällt als separater
 Rückgabetyp im Entwurf; bestehende `request(...)->await()`-Beispiele bleiben
-gültig. [geändert]
+gültig.
 
 `Reply` besitzt schreibgeschützte `payload`, `metadata` und `notices`.
 `responseClass` hydriert `payload` strukturell nach § 6, ohne die PHP-Klasse
@@ -1132,7 +1022,7 @@ aus lokaler Wartefrist ab `await` und ursprünglicher Antwortdeadline; ohne
 lokalen Timeout gilt die verbleibende Antwortfrist. Längere Remote-Fristen
 müssen vor Publish gesetzt sein und lassen sich mit `await` nicht verlängern.
 Ungültige Await-Optionen werfen `InvalidArgumentException`; die Nachricht
-ist zu diesem Zeitpunkt ausdrücklich bereits gesendet. [geändert]
+ist zu diesem Zeitpunkt ausdrücklich bereits gesendet.
 
 Ein lokaler Timeout oder Ablauf der ursprünglichen Antwortdeadline ohne
 rechtzeitiges finales Ergebnis wirft `RequestTimeoutException` mit `requestId`,
@@ -1146,7 +1036,7 @@ Await-Ausführung fixiert `responseClass`, `errorTypes` und Notice-Callback für
 widersprüchliche spätere Änderungen sind ungültig, ein neuer lokaler Timeout
 ist erlaubt. Notices werden pro Handle dedupliziert; vor `await` empfangene
 Notices bleiben nur im begrenzten Puffer, dessen Overflow explizit gemeldet
-wird, und sind nach Möglichkeit zusätzlich im finalen Reply enthalten. [geändert]
+wird, und sind nach Möglichkeit zusätzlich im finalen Reply enthalten.
 
 Der Client puffert nur begrenzt viele offene Vorgänge/Antwortbytes. Eine
 erschöpfte Kapazität wird vor einem weiteren antwortfähigen Publish als
@@ -1180,7 +1070,7 @@ publicMessage: ...)` im Responder und `catch (RemoteCommandException $e)` um
 `await`. Es gibt keine Anwendungspflicht, Fehlernachrichten zu abonnieren oder
 einen Fehler-Payload manuell auszuwerten; die Runtime verarbeitet das interne
 `rpc.error.v1` und wirft lokal eine Exception. Timeout ist weiterhin eine
-separate `RequestTimeoutException`. [neu]
+separate `RequestTimeoutException`.
 
 Für typisierte SDK-Fehler ist `#[RemoteError('math.division_by_zero.v1')]`
 auf einer konkreten Unterklasse von `RemoteException` vorgesehen.
@@ -1190,7 +1080,7 @@ für Übertragung freigegebene Fehler. Sein gemeinsamer Konstruktor lautet
 SDK-Unterklassen überschreiben ihn nicht und benötigen keine zusätzlichen
 Pflichtfelder. Der Server wirft beispielsweise
 `new DivisionByZero('Division durch null ist nicht möglich.')`. Die Meldung
-ist bewusst öffentlich; sensible Rohmeldungen dürfen nicht hineinkopiert werden. [neu]
+ist bewusst öffentlich; sensible Rohmeldungen dürfen nicht hineinkopiert werden.
 
 Der Client erlaubt lokale Klassen mit
 `await(errorTypes: [DivisionByZero::class])` oder
@@ -1201,7 +1091,7 @@ Attribute sind ungültige Await-Konfiguration. Ein gemeinsames SDK liefert
 dieselbe Exception-Klasse auf beiden Seiten; alternativ darf der Client eine
 anders benannte lokale Unterklasse mit demselben Fehlernamen erlauben.
 Ohne passenden Eintrag wird `RemoteCommandException` mit derselben sicheren
-Meldung geworfen. Typisierte Fehler sind deshalb auch generisch fangbar. [neu]
+Meldung geworfen. Typisierte Fehler sind deshalb auch generisch fangbar.
 
 Auf dem Wire bleibt es ein begrenztes Fehlerobjekt mit `errorType`, `code`,
 `message`, freigegebenen JSON-`details` und verifizierter Request-Zuordnung.
@@ -1211,7 +1101,7 @@ setzt den Request-Kontext aus der verifizierten Antwort. PHP-FQCN, Trace,
 `unserialize` und keine allgemeine Throwable-Hydration über phore/schema.
 `RemoteError` ist ein besonderer Fehlervertrag, kein `MessageType`, den
 `publish` als normalen Event automatisch versendet. Erst das Werfen im
-Responder löst die terminale Fehlerantwort aus. [neu]
+Responder löst die terminale Fehlerantwort aus.
 
 Nur eine ausdrücklich deklarierte `RemoteException` oder die bestehende
 `CommandFailedException` darf den vorgesehenen sicheren Text exportieren.
@@ -1220,13 +1110,13 @@ weitergeworfene generische Remote-Fehler werden nicht automatisch freigegeben:
 für sie gelten begrenzter Retry und generisches `HANDLER_FAILED` aus § 11.1.
 Typed Errors sind terminale fachliche Antworten ohne Retry; Veröffentlichung
 vor Ack bleibt erforderlich. Ein kaputtes/unerlaubtes Fehlerframe wird nicht
-als erfolgreiche Antwort oder als frei gewählte lokale Exception behandelt. [neu]
+als erfolgreiche Antwort oder als frei gewählte lokale Exception behandelt.
 
 Beispiel 05 enthält Server-Throw, generischen Client-Catch und typisierten
 Client-Catch einschließlich Meldung. Vorgesehene Tests: gleiche/andere lokale
 Klasse, unbekannter Fehlername, doppelte Allowlist-Namen, keine Offenlegung
 technischer Rohfehler, manipulierter Fehlerframe, Timeout versus Remote-Fehler
-und wiederholtes await ohne erneute Ausführung des Commands. [neu]
+und wiederholtes await ohne erneute Ausführung des Commands.
 
 ## § 14 Metadaten, Middleware und API-Entscheidung
 
@@ -1235,26 +1125,14 @@ Trace-/Locale-Metadaten, eine Send-Middleware, eine Handler-Middleware und
 das eigenständige Publizieren von Warnungen/Fehlern auf ein Diagnose-Topic.
 Das ist sowohl mit normalen Events als auch mit RPC nutzbar.
 
-### § 14.1 Frameworkvergleich und API-Entscheidung
+### § 14.1 API-Entscheidung
 
-| Framework / Library | Recherchierter Ansatz | Entscheidung für diese API |
-|---|---|---|
-| Symfony Messenger | `dispatch`, Handler, Envelope/Stamps, Middleware; `HandledStamp` liefert Ergebnisse ausgeführter Handler, kein automatischer Remote-Rückkanal | Metadaten und Hooks übernehmen; Remote-Warten ausdrücklich durch angehängtes `await()` ausdrücken |
-| PHP Enqueue | `sendCommand` mit Reply-Option, Promise/`receive`, `Result::reply` und `ReplyExtension` | Rückkanal vor dem Sendebefehl vorbereiten; das anschließende await löst keine zweite Sendung aus |
-| RabbitMQ PHP-Tutorial | Callback-Queue, `reply_to`, `correlation_id`, Duplikatbehandlung | Rückkanal und IDs intern verwalten, nicht in jedem Handler manuell publizieren |
-| NATS .NET Client | Explizites `RequestAsync`, Reply-Subject und Responder-Antwort | Verständliche Verben übernehmen; NATS-spezifische Inbox-Haltbarkeit nicht auf alle Broker übertragen |
-| MassTransit | Typisierte Requests/Responses, Response-Address, Fault-Nachrichten und Timeouts | Sichere terminale Fehlerantwort und lokale Exception; zusätzliche Client-/Bus-Fabriken im Alltagsaufruf vermeiden |
-| Laravel Queues | Job-Middleware um Handler-Ausführung mit Fortsetzungs-Callback | Kleinen Callable-Hook übernehmen, ohne Laravel-Job-Basisklasse und Container |
-
-**Empfehlung für dieses Paket:** eine Sendemethode `publish` für DTOs oder
-explizite Topic-/Typ-/Payload-Angaben, kleine Callbacks und optionales
-`await` auf dem Sendeergebnis. Der alltägliche RPC-Aufruf lautet
-`publish($command)->await(timeoutSeconds: 5)`, der Dienst verwendet
-`respond(...); run()`. Das einmalige Setup verwaltet Rückkanal und Policies;
-`request` bleibt eine ausdrückliche RPC-Komfortform. Direkte Laufzeitparameter
-und Optionsobjekte sind gleichwertige Zugänge zur selben Konfiguration.
-Dies ist die aktualisierte Designentscheidung für die Nutzeranforderungen,
-kein behaupteter objektiver Leistungsvergleich der Frameworks.
+Die öffentliche API bleibt klein und erklärt die Wirkung am Aufruf:
+`publish` sendet sofort, `await` wartet auf eine Antwort, `subscribe` und
+`respond` registrieren Handler, `run` verarbeitet Zustellungen. Ein zentrales
+`PhoreMQ` bündelt Konfiguration und Lebenszyklus. Fachliche DTOs tragen optionale
+Metadaten; Arrays und explizite Topic-/Typ-Angaben bleiben gleichwertig möglich.
+RabbitMQ-spezifische Klassen werden nur bei direkter Adapter-Injektion benötigt. [neu]
 
 ### § 14.2 Metadaten außerhalb des fachlichen Payloads
 
@@ -1322,12 +1200,7 @@ ursprünglichen Exception. Keine solchen Laufzeittests in diesem Entwurfs-PR.
 
 Quellen für §§ 13–14, abgerufen am 2026-09-12:
 
-- [RabbitMQ: RPC mit PHP](https://www.rabbitmq.com/tutorials/tutorial-six-php).
-- [PHP Enqueue: Commands, Replies und Promise](https://php-enqueue.github.io/quick_tour/).
-- [Symfony Messenger: Envelopes, Middleware und Handler-Ergebnisse](https://symfony.com/doc/current/messenger.html).
-- [NATS .NET: Request/Reply und Queue-Gruppen](https://nats.io/blog/nats-dotnet-v2-alpha-release/).
-- [MassTransit: Requests, Faults und Timeouts](https://masstransit.massient.com/concepts/requests).
-- [Laravel 12: Job-Middleware](https://laravel.com/framework/docs/12.x/queues#job-middleware).
+- [RabbitMQ: RPC mit PHP](https://www.rabbitmq.com/tutorials/tutorial-six-php). [neu]
 
 ## § 15 An alle Subscriber oder an einen Worker
 
@@ -1344,8 +1217,7 @@ eine unabhängige Audit-Subscription. „An einen“ bedeutet deshalb nicht
 weltweit exklusiv, falls daneben weitere Subscriptions existieren. Für die
 Processing-Queue provisioniert man bewusst nur die ausführende Worker-Gruppe;
 Audit-Consumer führen den Job nicht aus. Die ersten beiden Muster brauchen
-die Fan-out-Capability: Redis-Gruppen, RabbitMQ-Queues oder SNS+SQS passen,
-ein einzelnes SQS-Queue-Backend kann nicht allen Gruppen Kopien liefern.
+die RabbitMQ-Bindungen: Jede unabhängige Subscription besitzt ihre eigene Queue. [geändert]
 
 ### § 15.2 Lock-Koordination: alle bekannten Teilnehmer antworten
 
@@ -1396,40 +1268,37 @@ beweist nicht, welcher Teilnehmer tatsächlich den Lock besitzt.
 
 [Beispiel 08](../../examples/api-draft/08-processing-workers.php) startet
 mehrere Prozesse mit `respond('jobs.text', 'text-processors', ...)`.
-**Der Subscription-Name bleibt bei allen Workern identisch.** Die Factory
+**Der Subscription-Name bleibt bei allen Workern identisch.** Der Adapter
 erzeugt getrennte Transport-Consumer-IDs; eine Worker-ID dient im Beispiel
 nur als Antwortmetadatum, nicht als neue Subscription. Der Client ruft
 `request('jobs.text', 'text.process.v1', $params)->await()` auf und erhält
-Payload und die Kennung des verarbeitenden Workers zurück.
+Payload und die Kennung des verarbeitenden Workers zurück. [geändert]
 
-Die Auswahl erfolgt brokerabhängig anhand verfügbarer Consumer, Credits,
-Prefetch und Polling. „Random“ wird hier als „beliebiger verfügbarer Worker,
+RabbitMQ verteilt an verfügbare Consumer unter Berücksichtigung ihres Prefetch-Limits. „Random“ wird hier als „beliebiger verfügbarer Worker,
 ohne feste Zielinstanz“ verstanden. Gleichmäßiger Zufall, Round-robin oder
 garantierte Fairness sind kein portabler Vertrag; auch mehrere Jobs
 hintereinander beim selben Worker sind zulässig. Wer eine bestimmte
-Verteilungsstrategie benötigt, braucht einen gesonderten Scheduler.
+Verteilungsstrategie benötigt, braucht einen gesonderten Scheduler. [neu]
 
 Pro Zustellversuch wird ein Consumer ausgewählt; ein normaler Job wird
-nicht an alle Worker kopiert. Bei Crash, verlorenem Ack oder Lease-Ablauf
+nicht an alle Worker kopiert. Bei Crash, verlorenem Ack oder Verbindungsabbruch
 kann derselbe Job dennoch erneut zugestellt werden. Ein pausierter alter
-Worker kann nach Lease-Verlust sogar noch weiterlaufen, während ein neuer
+Worker kann nach Verlust seines Channels sogar noch weiterlaufen, während ein neuer
 übernimmt. „Nur ein Worker“ ist daher keine Exactly-once-/Seiteneffektgarantie:
-lange Verarbeitung braucht Lease-Pflege, kritische Aktionen benötigen
+lange Verarbeitung braucht passende Ack-Fristen und Heartbeat-Verarbeitung, kritische Aktionen benötigen
 Idempotenz oder ressourcenseitiges Fencing. Das Beispiel verarbeitet reinen
 Text ohne externe Seiteneffekte; Ergebnis-Publish erfolgt gemäß § 13 vor
-Request-Ack.
+Request-Ack. [geändert]
 
 ### § 15.4 Spätere Prüfungen und Quellen
 
 Vorgesehene Contract-Tests: Broadcast an drei Subscriptions versus drei
 Worker einer Gruppe, doppelte Teilnehmerantworten, fehlender/negativer
 Teilnehmer, spätes Acquire nach Release, Koordinator-Crash, veraltete Lease,
-falsche Teilnehmeridentität und erneute Job-Ausführung nach Lease-Verlust.
-Diese Tests gehören zur späteren Implementierung, nicht zum Entwurfs-PR.
+falsche Teilnehmeridentität und erneute Job-Ausführung nach Verbindungsabbruch.
+Diese Tests gehören zur späteren Implementierung, nicht zum Entwurfs-PR. [geändert]
 
-- [Redis XREADGROUP: Verteilung innerhalb von Consumer-Gruppen](https://redis.io/docs/latest/commands/xreadgroup/).
-- [RabbitMQ Consumers: konkurrierende Consumer und Zustellsteuerung](https://www.rabbitmq.com/docs/consumers).
-- [Redis: begrenzte Lock-Gültigkeit, Ownership und Fencing-Hinweise](https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/).
+- [RabbitMQ Consumers: konkurrierende Consumer und Zustellsteuerung](https://www.rabbitmq.com/docs/consumers). [geändert]
 
 Abruf: 2026-09-12; die konkrete API und die Barrierenlogik sind der
 hier vorgeschlagene Anwendungsentwurf.
@@ -1483,10 +1352,10 @@ Exception; `check` untersucht eine bereits erzeugte Connection erneut.
 |---|---|---|
 | Verbindung | Native Brokeranfrage mit den konfigurierten Zugangsdaten gelingt | Kein Nachweis für Publish-/Consume-Rechte auf allen Topics |
 | Lokale Konfiguration | Mapping, installierter Connector, Schema-Metadaten und Security-Konfiguration sind auflösbar | Keine Ausführung eines DTO-Konstruktors/Business-Handlers als Probe |
-| Ziel-Topologie | Topic/Subscription/Binding existieren, soweit der Adapter sie prüfen darf | Ohne Capability/Rechte unknown, niemals erfundener Erfolg |
-| Consumer-Bereitschaft | Aktuelle Antworten der erwarteten Gruppen/Instanzen, registrierter Handler für Typ, aktive Consume-Bindung und keine blockierende Störung | Consumer-Zähler oder veraltete Redis-Gruppen allein reichen nicht |
+| Ziel-Topologie | Topic/Subscription/Binding existieren, soweit der Adapter sie prüfen darf | Ohne Prüfmöglichkeit/Rechte unknown, niemals erfundener Erfolg |
+| Consumer-Bereitschaft | Aktuelle Antworten der erwarteten Gruppen/Instanzen, registrierter Handler für Typ, aktive Consume-Bindung und keine blockierende Störung | Consumer-Zähler allein reichen nicht |
 | Anwendungsabhängigkeiten | Benannte Prüfungen melden z. B. Datenbank, Ausgabeverzeichnis oder Fremddienst bereit | Nur tatsächlich geprüfte Abhängigkeiten; Probe muss seiteneffektfrei sein |
-| Betriebsprobleme | Optionale, aktuelle Werte für Rückstau, älteste Nachricht, Pending/Retry/Dead Letter und letzte Fehler | Schwellen konfiguriert; nicht messbare Werte sind null/unknown |
+| Betriebsprobleme | Optionale, aktuelle Werte für Rückstau, älteste Nachricht, Pending/Retry/Dead Letter und letzte Fehler | Schwellen konfiguriert; nicht messbare Werte sind null/unknown [geändert] |
 
 Ein erfolgreicher Health-Roundtrip beweist den Health-Pfad. Er beweist nicht
 automatisch den fachlichen Publish-Pfad, dessen Berechtigungen oder die
@@ -1544,10 +1413,10 @@ den gleichen Befund und wirft eine passende Retry-/Reject-Exception; die
 Library bestätigt die fehlgeschlagene Verarbeitung nicht als Erfolg.
 
 Die Runtime fragt für pausierte Ziele keine neuen Jobs ab. Bereits zugestellte
-Nachrichten werden nach der Lease-/Retry-Policy verzögert freigegeben oder
+Nachrichten werden nach der Retry-Policy verzögert freigegeben oder
 begrenzt gehalten, nicht engmaschig konsumiert und erneut veröffentlicht.
 Health-Probes sind davon getrennt. Unterbrechungsschutz, sichere Fehlerablage
-und die bestehenden Retry-Grenzen bleiben wirksam.
+und die bestehenden Retry-Grenzen bleiben wirksam. [geändert]
 
 ### § 16.4 Health-Kanal, Ausfälle und Authentifizierung
 
@@ -1690,12 +1559,10 @@ Statusmeldung, blockierter Health-Kanal, hängender Probe-Callback und
 Deadline-Verbrauch über mehrere Ziele. Keine fachlichen Nachrichten oder
 automatischen Ressourcenänderungen durch einen Check.
 
-Primärquellen: [Redis PING](https://redis.io/docs/latest/commands/ping/) für
-den eng begrenzten Verbindungsnachweis und [RabbitMQ Monitoring](https://www.rabbitmq.com/docs/monitoring)
+Primärquelle: [RabbitMQ Monitoring](https://www.rabbitmq.com/docs/monitoring)
 für die Unterscheidung von Broker-, Queue- und Anwendungszustand; abgerufen
 am 2026-09-12. Der einheitliche API-/Statusvertrag ist der hier vorgeschlagene
-Entwurf, kein behaupteter branchenweiter Standard.
-
+Entwurf, kein behaupteter branchenweiter Standard. [neu]
 
 ### § 16.8 Deklarierte Abhängigkeiten und Listenerdiagnose
 

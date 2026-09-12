@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\BroadcastLocking;
 
+require_once __DIR__ . '/connection.php';
+
+use function Examples\MessageQueue\demoConnection;
+
 use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\Exception\RejectMessageException;
 use Phore\MessageQueue\MessageContext;
@@ -36,7 +40,7 @@ interface LocalLeaseManager
 
 function runParticipant(string $participantId, LocalLeaseManager $locks): void
 {
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
+    $mq = new PhoreMQ(...demoConnection());
     try {
         // ENTSCHEIDEND: Jede erwartete Instanz hat einen ANDEREN Subscription-Namen.
         $mq->subscribe('maintenance.locks', 'locks-' . $participantId,
@@ -113,7 +117,7 @@ function withAllLocks(array $participants, callable $criticalSection): void
         'leaseUntil' => $leaseUntil,
     ];
 
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
+    $mq = new PhoreMQ(...demoConnection());
     try {
         // Vor dem Broadcast binden, damit auch sofortige Antworten erfasst werden.
         $mq->subscribe('maintenance.replies.coordinator-demo', 'lock-coordinator',

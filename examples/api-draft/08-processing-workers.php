@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\ProcessingWorkers;
 
+require_once __DIR__ . '/connection.php';
+
+use function Examples\MessageQueue\demoConnection;
+
 use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\Rpc\CommandFailedException;
 use Phore\MessageQueue\Rpc\RequestContext;
@@ -14,12 +18,12 @@ use Phore\MessageQueue\SubscriptionOptions;
  * API-ENTWURF, noch nicht ausführbar. Proposal § 15.3.
  * Prozesse A/B/C: runWorker( 'worker-1'/'worker-2'/'worker-3').
  * Danach Prozess D: submitJobs().
- * Alle Connections nutzen dasselbe lokale Queue-Verzeichnis. Ein Reply-Endpunkt pro Client.
+ * Alle Connections nutzen denselben RabbitMQ-Namespace. Ein Reply-Endpunkt pro Client.
  */
 
 function runWorker(string $workerId): void
 {
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
+    $mq = new PhoreMQ(...demoConnection());
     try {
         // ENTSCHEIDEND: Alle Worker verwenden exakt dieselbe Subscription.
         // $workerId NICHT an 'text-processors' anhängen, sonst entsteht Fan-out!
@@ -46,7 +50,7 @@ function runWorker(string $workerId): void
 
 function submitJobs(): void
 {
-    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
+    $mq = new PhoreMQ(...demoConnection());
     try {
         $pending = [];
         foreach (['  erster Job  ', '  zweiter Job  ', '  dritter Job  '] as $text) {
@@ -75,6 +79,6 @@ function submitJobs(): void
     }
 }
 
-// Crash/Lease-Ablauf/Ack-Verlust können eine erneute Zustellung verursachen.
+// Crash/Verbindungsabbruch/Ack-Verlust können eine erneute Zustellung verursachen.
 // Für schreibende Jobs zusätzlich Idempotenz/Fencing einsetzen; eine Gruppe
 // allein garantiert keine Exactly-once-Ausführung. Timeout/Remote-Fehler wie in 05 behandeln.
