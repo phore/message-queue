@@ -10,6 +10,7 @@
 | 2026-09-12 | dermatthes | §§ 5, 6, 6.2, 11: Callback-Kurzform, abgeleitete Metadaten, offene Topics und frühe Konfliktprüfung ergänzt |
 | 2026-09-12 | dermatthes | §§ 1.1, 2, 5, 6.2, 11, 13, 13.1, 13.2, 13.4, 14.1: Einheitliches publish für DTO/Explizitform, optionales await, direkte Laufzeitparameter und Deadline-Regeln ergänzt |
 | 2026-09-12 | dermatthes | §§ 5, 13.4: Worker-Limits, fehlendes minMessages und await-Timeout-Exception in den Beispielen erläutert |
+| 2026-09-12 | dermatthes | §§ 4, 4.1, 7, 8, 10, 11.1, 13.1, 13.2, 13.4, 13.5: Kurze lokale file-Beispiele, zentrale Verbindungsvorgaben, Callback-Fehler und typisierte RPC-Exceptions ergänzt |
 
 ## § 1 Abstract und Lieferumfang
 
@@ -212,12 +213,15 @@ DSN-/Connector-Felder im Optionsobjekt, keine später notwendigen Setter und
 kein zusätzliches `connect()` auf dem MQ-Objekt.
 
 `null` bedeutet ein frisches Optionsobjekt mit denselben dokumentierten
-Defaults für alle Erzeugungswege, kein implizites Lesen von Environment oder
-Secrets. Erforderliche Security-/Provider-Konfiguration muss weiterhin
-explizit vorliegen; fehlende Konfiguration wird nicht durch unsichere Defaults
+Defaults für alle Erzeugungswege. Environment und externe Secret-Stores werden
+nicht implizit gelesen; der file-Adapter verwaltet ausschließlich seinen
+dokumentierten lokalen Schlüssel im gewählten Root. Erforderliche Security-/
+Provider-Konfiguration muss für Netzwerkadapter weiterhin
+explizit vorliegen; das lokale file-Profil aus § 4.1 liefert dokumentierte
+Entwicklungsvorgaben; fehlende Konfiguration wird nicht durch unsichere Defaults
 ersetzt. Konfiguration wird beim Erzeugen validiert und als Snapshot verwendet;
 spätere Mutation des Optionsobjekts ändert das laufende MQ nicht. Explizit
-zustandsbehaftete injizierte Dienste wie `HealthState` bleiben dagegen geteilt.
+zustandsbehaftete injizierte Dienste wie `HealthState` bleiben dagegen geteilt. [geändert]
 
 Konstruktor und Factory bauen die Verbindung sofort mit begrenztem
 Verbindungstimeout auf. Erfolgreiche Rückkehr liefert ein verwendbares
@@ -267,6 +271,7 @@ Ownership und idempotentes `close`. In diesem PR bleibt dies API-Entwurf.
 | `rediss://user:password@host:6380/0` | Redis über TLS mit Zertifikatsprüfung |
 | `redis://:password@host:6379/0` | Redis-Passwort ohne ACL-Benutzer |
 | `redis+unix:///run/redis/redis.sock?db=0` | Redis-Server über Unix-Socket, weiterhin Redis-Protokoll |
+| `file:///tmp/phore-mq-demo` | Geplanter lokaler Entwicklungsadapter mit SQLite-Datei, Reply-/Failure-/Attachment-Store; Details § 4.1 [neu] |
 | `memory://` | Isolierter In-Memory-Broker je MQ-Erzeugung |
 | `unix:///run/user/1000/phore-mq.sock` | Eigenes lokales MQ-Protokoll, benötigt separaten Dev-Broker |
 | `sqs://eu-central-1/123456789012` | Geplanter Queue-Adapter; logische Topics per Routingtabelle auf Queue-URLs abbilden |
@@ -286,6 +291,54 @@ Broker-Zugangsdaten und HMAC-Shared-Secret sind getrennte Einstellungen.
 Attribute enthalten höchstens lokale Beispiel-DSNs oder Verbindungsnamen,
 keine produktiven Secrets. Für produktive Deployment-Konfiguration ist die
 programmatische Konstruktor-/Factory-Konfiguration vorzuziehen.
+
+### § 4.1 Kurzer lokaler Einstieg in den Beispielen
+
+Die Beispiele 02–10 verwenden `new PhoreMQ('file:///tmp/phore-mq-demo')`.
+`file` ist ein hier neu vorgeschlagener lokaler Entwicklungsadapter, noch
+keine vorhandene Funktion. Er speichert die Queue transaktional in SQLite
+unter dem angegebenen Root; `ext-pdo_sqlite` ist erforderlich. Alle Prozesse
+eines Demos teilen denselben Root. Unabhängige Demos verwenden frische Roots,
+da Subscriptions, Backlog und Fehler Neustarts überleben. Redis Streams bleibt
+der erste produktive Adapter; kein NFS-, Netzwerk- oder Multi-Host-Betrieb mit
+file und keine Gleichsetzung seiner Last-/Timing-Eigenschaften mit Redis. [neu]
+
+Dieses explizit gewählte lokale Profil provisioniert Queue/Subscriptions,
+FailureStore, Attachment-Store und pro MQ-Instanz einen zufällig eindeutigen
+RPC-Rückkanal im eigenen Root. Antworten sind nur an intern registrierte
+logische Reply-Ziele dieses Roots zulässig; niemals an beliebige Dateipfade.
+Es aktiviert die Schema-Bridge bei installiertem `phore/schema`; wenn eine
+benötigte Bridge fehlt, bleibt es bei `MissingDependencyException`. Der
+Konstruktor installiert keine Pakete und liest keine Environment-Variablen.
+Beispiel 02 ergänzt nur sein Klassenmapping, 06 seine Middleware und 09 seine
+Health-Definitionen. Solche fachlich relevanten Optionen bleiben sichtbar.
+Explizite Optionswerte überschreiben Profilvorgaben; ausgelassene Felder
+behalten die lokalen Vorgaben, auch in partiellen RPC-/Health-Optionsobjekten. [neu]
+
+Das Root wird nur als privates Verzeichnis desselben OS-Benutzers verwendet
+(Verzeichnis 0700, Dateien 0600); fremde Besitzer, unsichere Rechte und
+Symlink-Pfade werden abgelehnt statt still übernommen. Ein kryptografisch
+zufälliger HMAC-Key wird bei Erstinitialisierung atomar exklusiv angelegt und
+persistent gemeinsam verwendet, nicht pro Prozess ersetzt. Alle Frames
+verwenden die bestehende Signaturprüfung. Das ist ausschließlich Vertrauen
+zwischen lokalen Prozessen desselben Benutzers, keine Dienst-/Mandanten-
+Identität. Diese file-spezifische Erzeugung ersetzt keine Secret-Konfiguration
+bei Redis oder anderen Netzwerkadaptern. [neu]
+
+Claims, Versuchszähler, verzögerte Freigabe und Settlement müssen per SQLite-
+Transaktion konsistent sein; Handler laufen außerhalb der DB-Transaktion.
+Lease-Tokens verhindern Settlement durch veraltete Worker, nach Prozessabbruch
+können Leases wieder aufgenommen werden. At least once, Idempotenz, begrenztes
+Polling und kurze DB-Lock-Timeouts bleiben notwendig. Fehlerablage erfolgt
+transaktional vor/mit Ack, Attachments bleiben separate Dateien mit geprüften
+Referenzen. Retention und Bereinigung gelten auch für verwaiste Rückkanäle.
+Ohne diese Eigenschaften darf der Adapter keine Durable-Capability melden. [neu]
+
+Nur Beispiel 01 zeigt vollständige Connection-Optionen und die In-Memory-/
+Unix-Alternativen. Die übrigen Dateien erklären ihr jeweiliges Thema mit dem
+kurzen Einstieg; ihre APIs bleiben Entwürfe. Spätere Contract-Tests prüfen
+insbesondere zwei Prozesse, Crash/Lease-Recovery, Retry-Zähler, atomare
+Fehlerablage, private Pfade/Key-Erzeugungsrennen und eindeutige Rückkanäle. [neu]
 
 ## § 5 Senden, empfangen und Worker-Lebenszyklus
 
@@ -389,7 +442,7 @@ Ein aufgrund eines Typfilters übersprungener fachlicher Delivery zählt als
 abgearbeiteter Versuch. Das Limit ist keine Anzahl erfolgreicher oder
 eindeutiger Geschäftsoperationen. Nach Erreichen wird keine weitere fachliche
 Zustellung verarbeitet; bereits vorgeholte Einträge bleiben sicher unbestätigt
-bzw. werden nach der bestehenden Lease-/Freigabepolicy behandelt. [neu]
+bzw. werden nach der bestehenden Lease-/Freigabepolicy behandelt.
 
 `maxSeconds` ist das Gesamtbudget ab Loop-Start, einschließlich Warten und
 Verarbeitung. `idleTimeoutSeconds` begrenzt eine zusammenhängende Wartephase
@@ -399,14 +452,14 @@ Idle-Timer nicht zurück. Empfangswarten wird auf die verbleibenden Budgets
 begrenzt. Ein laufender synchroner Handler wird nicht präemptiv abgebrochen
 und kann das Gesamtbudget überschreiten; weitere Handler starten dann nicht.
 Erreichen eines Worker-Limits führt zu normaler Rückkehr, nicht zu einer
-Timeout-Exception. Echte Infrastrukturfehler bleiben Exceptions. [neu]
+Timeout-Exception. Echte Infrastrukturfehler bleiben Exceptions.
 
 `minMessages` gehört nicht zum Entwurf. `maxMessages` ist eine Obergrenze,
 keine Mindestzahl: Zeitlimit, Leerlauf oder `stop()` können den Loop früher
 beenden. Nicht gesetzte Grenzen sind unbegrenzt; `run()` ohne Limits läuft
 bis Stop oder Fehler. Eine fachlich erforderliche Mindestzahl bestätigt die
 Anwendung explizit, wie die Lock-Antwortaggregation in Beispiel 07. Die
-Optionskommentare stehen ausführlich in Beispiel 02 und am RPC-Loop in 05. [neu]
+Optionskommentare stehen ausführlich in Beispiel 02 und am RPC-Loop in 05.
 
 Standardmäßig folgt Ack erst nach erfolgreicher Callback-Rückkehr. Ein
 temporärer Handlerfehler löst eine begrenzte Retry-Policy aus; endgültige
@@ -614,6 +667,7 @@ Primärquellen, keine Aussage über bereits implementierte Adapter.
 | RabbitMQ | Exchanges/Bindings, Queues, Consumer-Ack und Publisher Confirms | Topic auf Exchange, Subscription auf Queue; AMQP-Protokollversion ausdrücklich festlegen |
 | NATS JetStream | Persistente Streams, langlebige Consumer, Ack und Redelivery | Späterer Adapter, Core NATS nicht mit JetStream gleichsetzen |
 | In-Memory | Prozessinterne kontrollierte Zustellung | Frühes Testwerkzeug, kein Ersatz für Brokerintegrationstests |
+| file (geplanter lokaler SQLite-Adapter) | Gemeinsamer Root für lokale Prozesse, Claims/Leases und Fehlerablage | Kurzer Entwicklungs-Einstieg gemäß § 4.1; kein Multi-Host-/NFS-Backend [neu] |
 | Unix-Socket | Lokaler Byte-Transport | Benötigt Dev-Broker für Routing, Gruppen und Receipts; keine Queue allein durch Socket/Semaphore |
 
 Redis benötigt getrennte Empfangs-/Publish-Verbindungen, begrenztes Blocking
@@ -648,9 +702,11 @@ benötigt weder Symfony-Servicecontainer noch automatische Handler-Suche.
 Default-Provider bei konfiguriertem Shared Secret ist **HMAC-SHA-256** mit
 Key-ID. Ein bloßer SHA-Hash mit angehängtem Secret ist kein geeignetes
 Signaturverfahren. Verbindungskonfiguration verlangt eine explizite Policy:
-HMAC oder bewusstes `UnsignedSecurity` für isolierte Tests; kein generiertes,
-fest eingebautes oder stillschweigend fehlendes Secret. Ein Empfänger mit
-HMAC-Policy weist unsignierte Nachrichten immer zurück.
+HMAC oder bewusstes `UnsignedSecurity` für isolierte Tests; die persistente
+lokale Key-Erzeugung des file-Profils ist in § 4.1 geregelt. Kein pro Prozess
+neu erzeugtes Wegwerf-Secret, fest eingebauter Schlüssel oder stillschweigend
+fehlendes Secret. Ein Empfänger mit
+HMAC-Policy weist unsignierte Nachrichten immer zurück. [geändert]
 
 Das signierte Envelope enthält Protokollversion, `messageId`, fachlichen Typ,
 Topic, Audience, UTC-`issuedAt`, optional `expiresAt`, Content-Type, Payload,
@@ -728,6 +784,10 @@ Reassembly sind spätere Erweiterungen und kein impliziter Bestandteil von
 
 ## § 10 Lokale Entwicklung: Memory, Redis-Socket und Dev-Broker
 
+Die konkreten Verbindungsbeispiele stehen zentral in
+[01-connect.php](../../examples/api-draft/01-connect.php); der neue file-Einstieg
+ist in § 4.1 beschrieben. [geändert]
+
 `memory://` durchläuft denselben Codec, dieselbe Signierung und dieselbe
 Schema-Bridge. Es kopiert serialisierte Nachrichten, keine veränderbaren
 Objektreferenzen. Zwei unabhängig erstellte Memory-Verbindungen teilen keinen
@@ -793,6 +853,69 @@ Responder geworfene `CommandFailedException` beschreibt einen ausdrücklich
 freigegebenen fachlichen Fehler; über den Rückkanal geht nur dessen sicheres
 Fehlerobjekt. Ein Fehlerlevel in einer Begleitmeldung ist kein terminaler
 Command-Fehler und ändert die Settlement-Entscheidung nicht.
+
+### § 11.1 Wenn ein Callback eine Exception wirft
+
+[Beispiel 10](../../examples/api-draft/10-callback-errors.php) zeigt die Fälle
+direkt im Handler; [Beispiel 06](../../examples/api-draft/06-metadata-middleware.php)
+zeigt das sichere Weiterwerfen nach Diagnose. Bei Auto-Ack bedeutet eine
+Exception vor Settlement: kein Erfolgs-Ack. Die Runtime fängt behandelbare
+`Throwable`s an der Handlergrenze ab und entscheidet nach folgender Policy. [neu]
+
+| Callback-Ergebnis | Standard im Entwurf |
+|---|---|
+| Normale Rückkehr | Ack nach erfolgreicher Verarbeitung [neu] |
+| `RetryableMessageException` | Begrenzter Retry mit Verzögerung; kein unendliches Erzwingen [neu] |
+| Andere unbehandelte Exception, einschließlich `TypeError` | Ebenfalls begrenzt wiederholen; nach Ausschöpfen sichere Fehlerablage und Alarm [neu] |
+| `RejectMessageException` | Sofort endgültig in die Fehlerablage, kein Retry [neu] |
+| `CommandFailedException` oder freigegebene `RemoteException` (§ 13.5) in `respond` | Bewusster fachlicher RPC-Fehler: sichere finale Antwort, danach Ack; keine technische Wiederholung [neu] |
+| Infrastrukturfehler bei Retry/Ack/FailureStore | Kein vorgetäuschter Erfolg; `run` wirft Infrastruktur-Exception, unbestätigte Nachricht bleibt wiederholbar [neu] |
+
+Vorgeschlagene Default-Policy: höchstens vier Versuche insgesamt, also drei
+Wiederholungen, mit 1, 2 und 4 Sekunden Verzögerung plus zufälligem Jitter von
+±10 %. `context->attempt` beginnt bei 1 und wird dauerhaft je Zustellung an
+eine Subscription geführt; Prozessneustart oder ein anderer Worker setzt den
+Zähler nicht zurück. Die Policy bleibt über `SubscriptionOptions::retryPolicy`
+austauschbar. Diese Defaults sind unsere Designentscheidung, keine Zusage des
+Brokers. Ein laufender Retry blockiert nicht durch sleep den ganzen Worker;
+der Job wird verzögert wieder verfügbar. [neu]
+
+Nach endgültiger Ablehnung oder ausgeschöpften Versuchen wird zuerst der
+FailureStore sicher bestätigt, dann die Ursprungszustellung beendet. Ohne
+verfügbaren FailureStore kein Verwerfen und kein Ack; `FailureStoreException`
+beendet den Loop. Der lokale file-Adapter hat die Fehlerablage im Profil,
+andere Adapter müssen eine verfügbare Ablage konfigurieren. Fehlerdaten
+enthalten ID, Subscription, Versuchszahl, Zeit und sichere Diagnose; Payloads
+und Stacktraces sind nur in zugriffsgeschützter lokaler Ablage zulässig, nicht
+ungefiltert in Events oder Frontend-Antworten. Manuelles Redrive erfolgt erst
+nach Ursachenklärung mit erhaltenem Bezug und neuer expliziter Retry-Runde. [neu]
+
+Bei technischen RPC-Fehlern wartet der Client über die zulässigen Retries.
+Nach endgültigem Scheitern sendet die Runtime, soweit Rückkanal und Deadline
+es noch erlauben, einen generischen sicheren `HANDLER_FAILED`-Fehler; der
+Client erhält `RemoteCommandException`. Rohtexte unerwarteter Exceptions
+werden nie übertragen. Fehlerablage und terminaler Reply-Publish werden vor
+Request-Ack bestätigt; technische Fehler dabei bleiben wiederholbar. Bei
+nicht erreichbarem Rückkanal kann stattdessen `RequestTimeoutException` beim
+Client eintreten. Für eine bekannte fachliche `CommandFailedException` oder freigegebene
+`RemoteException` ist keine technische FailureStore-Runde nötig; die sichere
+Antwort bleibt aber zu bestätigen. [neu]
+
+Ein behandelter Callback-Fehler beendet normalerweise nicht den Worker;
+andere Jobs können weiterlaufen. Middleware darf die Exception loggen und
+muss sie für korrekte Retry-/Ack-Entscheidung weiterwerfen. Prozesskill oder
+Speichermangel sind nicht zuverlässig abfangbar: fehlendes Ack und ablaufende
+Lease ermöglichen Recovery. Externe Seiteneffekte werden nicht zurückgerollt;
+Idempotenz oder anwendungsseitige Transaktionen bleiben nötig. Ein bereits
+manuell gesetztes Ack lässt sich durch eine spätere Exception nicht widerrufen. [neu]
+
+Orientierung: [Symfony Messenger – Retries & Failures](https://symfony.com/doc/current/messenger.html#retries-failures)
+trennt verzögerte Wiederholungen, endgültige Fehler und Failure-Transports;
+[RabbitMQ – Acknowledgements](https://www.rabbitmq.com/docs/confirms)
+unterscheidet Bestätigung, Requeue und Dead Letter. Unser Entwurf verbietet
+stilles Verwerfen ohne sichere Ablage und begrenzt auch ausdrücklich retrybare
+Fehler. Abruf 2026-09-12. Spätere Tests: Retry-Zählung über Neustarts, Fehlerablage
+ausgefallen, Middleware schluckt/erhält Fehler, RPC-Endfehler und manuelles Ack. [neu]
 
 ## § 12 Paketgrenzen, spätere Prüfungen und Quellen
 
@@ -860,7 +983,8 @@ damit sehr schnelle Antworten nicht verloren gehen.
 `RequestOptions` ergänzt `timeoutSeconds` (Default 30 Sekunden ab `request`,
 nicht ab `await`), `metadata`, optional `responseClass` und `onNotice`.
 `SendResult::await(?AwaitOptions $options = null, ?float $timeoutSeconds = null,
-?string $responseClass = null, ?callable $onNotice = null): Reply` verarbeitet
+?string $responseClass = null, ?callable $onNotice = null,
+?array $errorTypes = null): Reply` verarbeitet
 nur den internen Rückkanal dieser
 Connection, keine beliebigen Business-Handler. Mehrere Pending-Requests
 teilen einen Dispatcher, der nach Request-ID puffert; Anzahl und Speicher
@@ -870,7 +994,7 @@ und einen unabhängig laufenden Responder verwenden.
 `RequestOptions::responseClass`/`onNotice` liefern lediglich die Anfangswerte
 für dieselben Await-Einstellungen. `PendingReply` entfällt als separater
 Rückgabetyp im Entwurf; bestehende `request(...)->await()`-Beispiele bleiben
-gültig.
+gültig. [geändert]
 
 `Reply` besitzt schreibgeschützte `payload`, `metadata` und `notices`.
 `responseClass` hydriert `payload` strukturell nach § 6, ohne die PHP-Klasse
@@ -885,7 +1009,7 @@ Ohne konfigurierte RPC-Schicht sind `request` und `respond` frühe
 |---|---|---|
 | Request | Command-Parameter | `requestId` (= Request-`messageId`), `replyTo`, Deadline, `kind=request`, optionale fachliche `correlationId` |
 | Result (`rpc.result.v1`) | Rückgabedaten | Ursprüngliche `requestId`, `kind=result`, eigene `messageId`, Antwortmetadaten und gesammelte Notices |
-| Error (`rpc.error.v1`) | Sicheres Fehlerobjekt mit `code`, `message`, begrenzten `details` | `requestId`, `kind=error`, eigene `messageId`, gesammelte Notices |
+| Error (`rpc.error.v1`) | Sicheres Fehlerobjekt mit `code`, `message`, begrenzten `details` und optionalem `errorType` (§ 13.5) | `requestId`, `kind=error`, eigene `messageId`, gesammelte Notices |
 | Notice (`rpc.notice.v1`) | `level`, `code`, `message`, begrenzte `details` | `requestId`, `noticeId`, eigene `messageId`, `kind=notice` |
 
 Command-Typ und Subscription bestimmen eine logische Responder-Gruppe,
@@ -1000,7 +1124,7 @@ transportiert, damit keine Antwortschleifen entstehen.
 
 `PublishOptions::replyTimeoutSeconds` bestimmt die vor dem Senden signierte
 Antwortfrist (Default 30 Sekunden ab Sendebeginn). `expiresAt` kann die Frist
-zusätzlich verkürzen. `Phore\MessageQueue\Rpc\AwaitOptions(timeoutSeconds, responseClass, onNotice)`
+zusätzlich verkürzen. `Phore\MessageQueue\Rpc\AwaitOptions(timeoutSeconds, responseClass, onNotice, errorTypes)`
 steuert dagegen ausschließlich das lokale Warten und die lokale
 Ergebnisdarstellung. Direkte nicht-null Await-Parameter überschreiben das
 Optionsobjekt wie bei `run`. Das effektive Warten endet am früheren Zeitpunkt
@@ -1008,7 +1132,7 @@ aus lokaler Wartefrist ab `await` und ursprünglicher Antwortdeadline; ohne
 lokalen Timeout gilt die verbleibende Antwortfrist. Längere Remote-Fristen
 müssen vor Publish gesetzt sein und lassen sich mit `await` nicht verlängern.
 Ungültige Await-Optionen werfen `InvalidArgumentException`; die Nachricht
-ist zu diesem Zeitpunkt ausdrücklich bereits gesendet.
+ist zu diesem Zeitpunkt ausdrücklich bereits gesendet. [geändert]
 
 Ein lokaler Timeout oder Ablauf der ursprünglichen Antwortdeadline ohne
 rechtzeitiges finales Ergebnis wirft `RequestTimeoutException` mit `requestId`,
@@ -1018,7 +1142,7 @@ Handle erneut warten, ohne erneutes Senden; eine bereits verifizierte terminale
 Antwort wird bis zur Handle-Freigabe zwischengespeichert. Ein nach Ablauf erst
 eintreffendes Result wird nicht mehr als rechtzeitige Antwort akzeptiert.
 Bereits rechtzeitig empfangene finale Ergebnisse bleiben abrufbar. Die erste
-Await-Ausführung fixiert `responseClass` und Notice-Callback für diesen Handle;
+Await-Ausführung fixiert `responseClass`, `errorTypes` und Notice-Callback für diesen Handle;
 widersprüchliche spätere Änderungen sind ungültig, ein neuer lokaler Timeout
 ist erlaubt. Notices werden pro Handle dedupliziert; vor `await` empfangene
 Notices bleiben nur im begrenzten Puffer, dessen Overflow explizit gemeldet
@@ -1048,6 +1172,61 @@ Antwort vor await, lokaler Timeout und späteres Result, unverlängerbare
 Wire-Deadline, fehlender Rückkanal/Responder, Notice-Puffergrenze, ignorierte
 Handles, Kapazitätsgrenze, interne Antworten ohne Rekursion und direkte
 Parameter versus Optionsobjekt. Beispiel 05 zeigt beide Sendeformen.
+
+### § 13.5 Eigene RPC-Exceptions mit freigegebener Meldung
+
+Der einfache Weg bleibt `throw new CommandFailedException(errorCode: ...,
+publicMessage: ...)` im Responder und `catch (RemoteCommandException $e)` um
+`await`. Es gibt keine Anwendungspflicht, Fehlernachrichten zu abonnieren oder
+einen Fehler-Payload manuell auszuwerten; die Runtime verarbeitet das interne
+`rpc.error.v1` und wirft lokal eine Exception. Timeout ist weiterhin eine
+separate `RequestTimeoutException`. [neu]
+
+Für typisierte SDK-Fehler ist `#[RemoteError('math.division_by_zero.v1')]`
+auf einer konkreten Unterklasse von `RemoteException` vorgesehen.
+`RemoteException` erbt von `RemoteCommandException` und markiert explizit
+für Übertragung freigegebene Fehler. Sein gemeinsamer Konstruktor lautet
+`__construct(string $message, string $errorCode = 'REMOTE_ERROR', array $details = [])`;
+SDK-Unterklassen überschreiben ihn nicht und benötigen keine zusätzlichen
+Pflichtfelder. Der Server wirft beispielsweise
+`new DivisionByZero('Division durch null ist nicht möglich.')`. Die Meldung
+ist bewusst öffentlich; sensible Rohmeldungen dürfen nicht hineinkopiert werden. [neu]
+
+Der Client erlaubt lokale Klassen mit
+`await(errorTypes: [DivisionByZero::class])` oder
+`await(new AwaitOptions(errorTypes: [...]))`. Das ist eine lokale Allowlist,
+keine Liste vom Sender. Der Resolver ordnet den stabilen RemoteError-Namen der
+Klasse zu; doppelte Namen, ungeeignete Klassen/Konstruktoren oder fehlende
+Attribute sind ungültige Await-Konfiguration. Ein gemeinsames SDK liefert
+dieselbe Exception-Klasse auf beiden Seiten; alternativ darf der Client eine
+anders benannte lokale Unterklasse mit demselben Fehlernamen erlauben.
+Ohne passenden Eintrag wird `RemoteCommandException` mit derselben sicheren
+Meldung geworfen. Typisierte Fehler sind deshalb auch generisch fangbar. [neu]
+
+Auf dem Wire bleibt es ein begrenztes Fehlerobjekt mit `errorType`, `code`,
+`message`, freigegebenen JSON-`details` und verifizierter Request-Zuordnung.
+Die Factory erzeugt ausschließlich einen lokal erlaubten Exception-Typ und
+setzt den Request-Kontext aus der verifizierten Antwort. PHP-FQCN, Trace,
+`previous` und beliebige Objektproperties werden nicht übertragen; kein
+`unserialize` und keine allgemeine Throwable-Hydration über phore/schema.
+`RemoteError` ist ein besonderer Fehlervertrag, kein `MessageType`, den
+`publish` als normalen Event automatisch versendet. Erst das Werfen im
+Responder löst die terminale Fehlerantwort aus. [neu]
+
+Nur eine ausdrücklich deklarierte `RemoteException` oder die bestehende
+`CommandFailedException` darf den vorgesehenen sicheren Text exportieren.
+Beliebige `Exception`-/`RuntimeException`-Unterklassen oder vom Handler
+weitergeworfene generische Remote-Fehler werden nicht automatisch freigegeben:
+für sie gelten begrenzter Retry und generisches `HANDLER_FAILED` aus § 11.1.
+Typed Errors sind terminale fachliche Antworten ohne Retry; Veröffentlichung
+vor Ack bleibt erforderlich. Ein kaputtes/unerlaubtes Fehlerframe wird nicht
+als erfolgreiche Antwort oder als frei gewählte lokale Exception behandelt. [neu]
+
+Beispiel 05 enthält Server-Throw, generischen Client-Catch und typisierten
+Client-Catch einschließlich Meldung. Vorgesehene Tests: gleiche/andere lokale
+Klasse, unbekannter Fehlername, doppelte Allowlist-Namen, keine Offenlegung
+technischer Rohfehler, manipulierter Fehlerframe, Timeout versus Remote-Fehler
+und wiederholtes await ohne erneute Ausführung des Commands. [neu]
 
 ## § 14 Metadaten, Middleware und API-Entscheidung
 

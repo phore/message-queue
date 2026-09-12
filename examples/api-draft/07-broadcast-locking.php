@@ -4,14 +4,11 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\BroadcastLocking;
 
-use Phore\MessageQueue\ConnectionFactory;
-use Phore\MessageQueue\ConnectionOptions;
+use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\Exception\RejectMessageException;
 use Phore\MessageQueue\MessageContext;
-use Phore\MessageQueue\MessageQueueInterface;
 use Phore\MessageQueue\PublishOptions;
 use Phore\MessageQueue\RunOptions;
-use Phore\MessageQueue\Security\HmacSecurity;
 use Phore\MessageQueue\SubscriptionOptions;
 
 /**
@@ -37,21 +34,9 @@ interface LocalLeaseManager
     public function release(string $resource, string $roundId, int $leaseUntilUnix): void;
 }
 
-function connect(string $dsn, string $secret): MessageQueueInterface
+function runParticipant(string $participantId, LocalLeaseManager $locks): void
 {
-    return (new ConnectionFactory())->connect($dsn, new ConnectionOptions(
-        security: new HmacSecurity(
-            sharedSecret: $secret,
-            keyId: 'development-1',
-            audience: 'lock-demo',
-        ),
-        autoCreate: true,
-    ));
-}
-
-function runParticipant(string $dsn, string $secret, string $participantId, LocalLeaseManager $locks): void
-{
-    $mq = connect($dsn, $secret);
+    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
     try {
         // ENTSCHEIDEND: Jede erwartete Instanz hat einen ANDEREN Subscription-Namen.
         $mq->subscribe('maintenance.locks', 'locks-' . $participantId,
@@ -103,7 +88,7 @@ function runParticipant(string $dsn, string $secret, string $participantId, Loca
  * Die Anwendung muss Ablauf/Fencing AN DER ZIELRESSOURCE durchsetzen; ein
  * PHP-Zeitvergleich allein schützt nicht vor Prozesspausen/Lease-Verlust.
  */
-function withAllLocks(string $dsn, string $secret, array $participants, callable $criticalSection): void
+function withAllLocks(array $participants, callable $criticalSection): void
 {
     foreach ($participants as $participant) {
         if (!is_string($participant) || $participant === '') {
@@ -128,7 +113,7 @@ function withAllLocks(string $dsn, string $secret, array $participants, callable
         'leaseUntil' => $leaseUntil,
     ];
 
-    $mq = connect($dsn, $secret);
+    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
     try {
         // Vor dem Broadcast binden, damit auch sofortige Antworten erfasst werden.
         $mq->subscribe('maintenance.replies.coordinator-demo', 'lock-coordinator',

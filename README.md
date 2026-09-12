@@ -19,7 +19,7 @@ PHP-Dateien zeigen die vorgeschlagene API und sind noch nicht ausführbar.
 - [Verbinden: URL, Konnektor und Attribute](examples/api-draft/01-connect.php)
 - [Programmatisch senden und empfangen](examples/api-draft/02-programmatic.php)
 - [SDK-Typen und Handler mit Attributen](examples/api-draft/03-attributes.php)
-- [ZIP-Dateien und lokale Entwicklung](examples/api-draft/04-files-and-local.php)
+- [ZIP-Dateien per Speicherreferenz](examples/api-draft/04-files-and-local.php)
 - [RPC: Command, Ergebnis, Warnings und Fehler](examples/api-draft/05-rpc.php)
 - [Metadaten und Diagnose-Middleware](examples/api-draft/06-metadata-middleware.php)
 - [Broadcast und Antworten aller Lock-Teilnehmer](examples/api-draft/07-broadcast-locking.php)
@@ -65,6 +65,15 @@ Häufige Optionen gehen direkt: `run(maxMessages: 100, maxSeconds: 30)`;
 `RunOptions`/`AwaitOptions` bleiben erlaubt, direkte Werte überschreiben ihre
 entsprechenden Felder. Das vollständige Beispiel steht in
 [05-rpc.php](examples/api-draft/05-rpc.php).
+
+Einfacher lokaler Einstieg im Entwurf: `new PhoreMQ('file:///tmp/phore-mq-demo')`.
+Die Voraussetzungen dieses geplanten Entwicklungsadapters stehen zentral in
+[01-connect.php](examples/api-draft/01-connect.php); Redis bleibt Produktionsstandard.
+Callback-Fehler und begrenzte Retries zeigt
+[10-callback-errors.php](examples/api-draft/10-callback-errors.php).
+
+[Message Queue Basics 101](docs/message-queue-basics-101.md) erklärt Begriffe,
+Zustellung, Aufbewahrung und die Grenzen der geplanten Adapter.
 
 ## Git Submodules
 

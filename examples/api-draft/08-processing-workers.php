@@ -4,43 +4,22 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\ProcessingWorkers;
 
-use Phore\MessageQueue\ConnectionFactory;
-use Phore\MessageQueue\ConnectionOptions;
-use Phore\MessageQueue\MessageQueueInterface;
+use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\Rpc\CommandFailedException;
 use Phore\MessageQueue\Rpc\RequestContext;
 use Phore\MessageQueue\Rpc\RequestOptions;
-use Phore\MessageQueue\Rpc\RpcConnectionOptions;
-use Phore\MessageQueue\Security\HmacSecurity;
 use Phore\MessageQueue\SubscriptionOptions;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal § 15.3.
- * Prozesse A/B/C: runWorker($dsn, $secret, 'worker-1'/'worker-2'/'worker-3').
- * Danach Prozess D: submitJobs($dsn, $secret).
- * Alle Connections nutzen denselben Redis-Prefix. Ein Reply-Endpunkt pro Client.
+ * Prozesse A/B/C: runWorker( 'worker-1'/'worker-2'/'worker-3').
+ * Danach Prozess D: submitJobs().
+ * Alle Connections nutzen dasselbe lokale Queue-Verzeichnis. Ein Reply-Endpunkt pro Client.
  */
 
-function connect(string $dsn, string $secret, bool $client): MessageQueueInterface
+function runWorker(string $workerId): void
 {
-    return (new ConnectionFactory())->connect($dsn, new ConnectionOptions(
-        security: new HmacSecurity(
-            sharedSecret: $secret,
-            keyId: 'development-1',
-            audience: 'processing-demo',
-        ),
-        rpc: new RpcConnectionOptions(
-            replyTopic: $client ? 'jobs.replies.client-demo' : null,
-            replySubscription: $client ? 'processing-client-demo' : null,
-            allowedReplyTopics: ['jobs.replies.client-demo'],
-        ),
-        autoCreate: true,
-    ));
-}
-
-function runWorker(string $dsn, string $secret, string $workerId): void
-{
-    $mq = connect($dsn, $secret, client: false);
+    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
     try {
         // ENTSCHEIDEND: Alle Worker verwenden exakt dieselbe Subscription.
         // $workerId NICHT an 'text-processors' anhängen, sonst entsteht Fan-out!
@@ -65,9 +44,9 @@ function runWorker(string $dsn, string $secret, string $workerId): void
     }
 }
 
-function submitJobs(string $dsn, string $secret): void
+function submitJobs(): void
 {
-    $mq = connect($dsn, $secret, client: true);
+    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
     try {
         $pending = [];
         foreach (['  erster Job  ', '  zweiter Job  ', '  dritter Job  '] as $text) {

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\SystemCheck;
 
-use Phore\MessageQueue\ConnectionFactory;
+use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\Exception\RetryableMessageException;
 use Phore\MessageQueue\Health\CheckOptions;
@@ -13,33 +13,17 @@ use Phore\MessageQueue\Health\HealthOptions;
 use Phore\MessageQueue\Health\HealthState;
 use Phore\MessageQueue\Health\ReadinessRequirement;
 use Phore\MessageQueue\MessageQueueInterface;
-use Phore\MessageQueue\Security\HmacSecurity;
-use Phore\MessageQueue\Rpc\RpcConnectionOptions;
 use Phore\MessageQueue\SubscriptionOptions;
 
 /** API-ENTWURF, keine ausführbare Implementierung. Proposal § 16.
- * Alle Parameter/Secrets werden explizit injiziert. Health-Ressourcen und
- * Reply-Berechtigungen müssen vorab provisioniert sein (autoCreate: false).
+ * Lokaler Einstieg wie in 01-connect.php; hier ausschließlich Health-Konfiguration.
  */
-function connect(string $dsn, string $secret, HealthOptions $health): MessageQueueInterface
-{
-    return (new ConnectionFactory())->connect($dsn, new ConnectionOptions(
-        security: new HmacSecurity(
-            sharedSecret: $secret, keyId: 'development-1', audience: 'health-demo',
-        ),
-        rpc: new RpcConnectionOptions(allowedReplyTopics: [
-            'jobs.replies.frontend-demo', // Explizit provisionierter RPC-Rückkanal.
-        ]),
-        health: $health,
-        autoCreate: false,
-    ));
-}
 
 // Beispiel eines definierten Anwendungsfehlers aus dem injizierten Exporter.
 final class OutputPermissionException extends \RuntimeException {}
 
 function runExportWorker(
-    string $dsn, string $secret, string $instanceId, string $host,
+    string $instanceId, string $host,
     string $outputDirectory, callable $processExport,
 ): void {
     $state = new HealthState(serviceId: 'export-service', instanceId: $instanceId);
@@ -64,7 +48,7 @@ function runExportWorker(
     ), topic: 'jobs.export', type: 'export.create.v1');
     $refresh($state);
 
-    $mq = connect($dsn, $secret, new HealthOptions(
+    $mq = new PhoreMQ('file:///tmp/phore-mq-demo', new ConnectionOptions(health: new HealthOptions(
         state: $state,
         refresh: $refresh,
         refreshIntervalSeconds: 5,
@@ -75,7 +59,7 @@ function runExportWorker(
             'processMemoryBytes' => memory_get_usage(true),
             'processPeakMemoryBytes' => memory_get_peak_usage(true),
         ],
-    ));
+    )));
     try {
         $mq->respond('jobs.export', 'export-workers',
             static function (array $parameters) use ($processExport, $state, $denied): array {
@@ -96,9 +80,9 @@ function runExportWorker(
     }
 }
 
-function frontendConnection(string $dsn, string $secret, string $instanceId): MessageQueueInterface
+function frontendConnection(string $instanceId): MessageQueueInterface
 {
-    return connect($dsn, $secret, new HealthOptions(
+    return new PhoreMQ('file:///tmp/phore-mq-demo', new ConnectionOptions(health: new HealthOptions(
         state: new HealthState(serviceId: 'frontend-backend', instanceId: $instanceId),
         requirements: [
             // Mein System BRAUCHT diesen Nachrichtentyp, mit mindestens einem Worker.
@@ -112,7 +96,7 @@ function frontendConnection(string $dsn, string $secret, string $instanceId): Me
                 subscriptions: ['audit-service', 'mail-service'],
             ),
         ],
-    ));
+    )));
 }
 
 function checkAtLogin(MessageQueueInterface $mq): array

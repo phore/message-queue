@@ -10,11 +10,8 @@ use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\SubscriptionOptions;
 use Phore\MessageQueue\Exception\MessageMappingException;
 use Phore\MessageQueue\Exception\InvalidHandlerException;
-use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\MessageQueueInterface;
-use Phore\MessageQueue\Schema\PhoreSchemaMapper;
-use Phore\MessageQueue\Security\HmacSecurity;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal §§ 4–6.
@@ -48,19 +45,6 @@ final class UserHandlers
     }
 }
 
-function createConnection(string $dsn, string $sharedSecret): MessageQueueInterface
-{
-    return new PhoreMQ($dsn, new ConnectionOptions(
-        security: new HmacSecurity(
-            sharedSecret: $sharedSecret,
-            keyId: 'development-1',
-            audience: 'user-services-development',
-        ),
-        schemaMapper: new PhoreSchemaMapper(),
-        autoCreate: true,
-    ));
-}
-
 function send(MessageQueueInterface $mq): void
 {
     $user = new T_UserCreated();
@@ -76,9 +60,9 @@ function send(MessageQueueInterface $mq): void
     ]);
 }
 
-function demo(string $dsn, string $sharedSecret): void
+function demo(): void
 {
-    $mq = createConnection($dsn, $sharedSecret);
+    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
     try {
         // Attributvariante: Resolver liest Methodensignatur und DTO-Metadaten.
         $mq->registerHandlers(new UserHandlers());
@@ -93,14 +77,13 @@ function demo(string $dsn, string $sharedSecret): void
 
 // Getrennte Prozesse: Empfänger legt/bindet Subscriptions vor dem ersten Senden
 // an und ruft run() auf. Sender ruft danach send() auf seiner eigenen Connection
-// auf. Beide verwenden denselben Broker-Prefix, HMAC-Key und dieselbe Audience.
-
+// auf. Beide verwenden dasselbe lokale Queue-Verzeichnis (Vorgaben in 01-connect.php).
 
 // Alternative zur Attributregistrierung: nur den Callback übergeben.
 // Auf einer eigenen MQ-Instanz statt demo()/registerHandlers() ausführen.
-function demoCallback(string $dsn, string $sharedSecret): void
+function demoCallback(): void
 {
-    $mq = createConnection($dsn, $sharedSecret);
+    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
     try {
         $mq->subscribe(function (T_UserCreated $user, MessageContext $context): void {
             printf("Callback: %s / %s\n", $context->messageId, $user->email);
@@ -135,9 +118,9 @@ final class AuditHandlers
     }
 }
 
-function demoMultipleTopics(string $dsn, string $sharedSecret): void
+function demoMultipleTopics(): void
 {
-    $mq = createConnection($dsn, $sharedSecret);
+    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
     try {
         $handler = static function (T_AuditEntry $entry): void {
             printf("Audit: %s\n", $entry->text);

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\Metadata;
 
-use Phore\MessageQueue\ConnectionFactory;
+use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\Exception\RejectMessageException;
 use Phore\MessageQueue\MessageContext;
@@ -12,34 +12,21 @@ use Phore\MessageQueue\Middleware\OutgoingMessage;
 use Phore\MessageQueue\PublishOptions;
 use Phore\MessageQueue\PublishReceipt;
 use Phore\MessageQueue\RunOptions;
-use Phore\MessageQueue\Security\HmacSecurity;
 use Phore\MessageQueue\SubscriptionOptions;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal § 14.
  * Zwei optionale Callable-Hooks, keine Middleware-Basisklasse erforderlich.
- * Beispielaufruf: demo($dsn, $secret, $traceId), mit frischem Redis-Prefix.
+ * Beispielaufruf: demo($traceId), mit frischem lokalen Queue-Verzeichnis.
  */
 
-function demo(string $dsn, string $secret, string $traceId): void
+function demo(string $traceId): void
 {
-    $factory = new ConnectionFactory();
-    $security = new HmacSecurity(
-        sharedSecret: $secret,
-        keyId: 'development-1',
-        audience: 'orders-development',
-    );
-
     // Separate Connection ohne Diagnose-Middleware verhindert Fehlerschleifen.
-    $diagnostics = $factory->connect($dsn, new ConnectionOptions(
-        security: $security,
-        autoCreate: true,
-    ));
+    $diagnostics = new PhoreMQ('file:///tmp/phore-mq-demo');
 
     try {
-        $mq = $factory->connect($dsn, new ConnectionOptions(
-            security: $security,
-            autoCreate: true,
+        $mq = new PhoreMQ('file:///tmp/phore-mq-demo', new ConnectionOptions(
             sendMiddleware: [
                 // $next: callable(OutgoingMessage): PublishReceipt
                 static function (OutgoingMessage $message, callable $next) use ($traceId): PublishReceipt {

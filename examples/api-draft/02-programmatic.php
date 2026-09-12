@@ -4,20 +4,18 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\Programmatic;
 
-use Phore\MessageQueue\ConnectionFactory;
+use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\Exception\MessageValidationException;
 use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\MessageRegistry;
-use Phore\MessageQueue\Schema\PhoreSchemaMapper;
-use Phore\MessageQueue\Security\HmacSecurity;
 use Phore\MessageQueue\SubscriptionOptions;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal §§ 5–6 und 11.
- * Beispielaufruf nach Implementierung: demo($dsn, $sharedSecret).
- * Dafür einen frischen Redis-Prefix verwenden: zwei neue Subscriptions werden
- * vor dem Publish gebunden. Bei wiederverwendetem Prefix kann Backlog anliegen.
+ * Beispielaufruf nach Implementierung: demo().
+ * Dafür ein frisches lokales Queue-Verzeichnis verwenden: zwei neue Subscriptions werden
+ * vor dem Publish gebunden. Bei wiederverwendetem Verzeichnis kann Backlog anliegen.
  */
 
 // Beliebige eigene Klasse: kein gemeinsames SDK und keine Attribute notwendig.
@@ -27,21 +25,13 @@ final class LocalUserCreated
     public string $email;
 }
 
-function demo(string $dsn, string $sharedSecret): void
+function demo(): void
 {
     $registry = new MessageRegistry();
     $registry->register('user.created.v1', LocalUserCreated::class, topic: 'users');
 
-    $mq = (new ConnectionFactory())->connect($dsn, new ConnectionOptions(
-        security: new HmacSecurity(
-            sharedSecret: $sharedSecret,
-            keyId: 'development-1',
-            audience: 'user-services-development',
-        ),
-        registry: $registry,
-        schemaMapper: new PhoreSchemaMapper(),
-        autoCreate: true,
-    ));
+    $mq = new PhoreMQ('file:///tmp/phore-mq-demo', new ConnectionOptions(registry: $registry));
+    // Nur das hier gezeigte Klassenmapping ergänzen; Verbindung siehe 01-connect.php.
 
     try {
         // Array: für diesen Typ validiert der registrierte Contract die Struktur.

@@ -4,53 +4,39 @@ declare(strict_types=1);
 
 namespace Examples\MessageQueue\Rpc;
 
+use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\Attribute\Respond;
+use Phore\MessageQueue\Attribute\RemoteError;
+use Phore\MessageQueue\Rpc\RemoteException;
 use Phore\MessageQueue\Attribute\MessageType;
 use Phore\MessageQueue\PublishOptions;
 use Phore\MessageQueue\RunOptions;
 use Phore\MessageQueue\Rpc\AwaitOptions;
-use Phore\MessageQueue\ConnectionFactory;
-use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\MessageQueueInterface;
 use Phore\MessageQueue\Rpc\CommandFailedException;
 use Phore\MessageQueue\Rpc\Notice;
 use Phore\MessageQueue\Rpc\RemoteCommandException;
 use Phore\MessageQueue\Rpc\RequestContext;
 use Phore\MessageQueue\Rpc\RequestTimeoutException;
-use Phore\MessageQueue\Rpc\RpcConnectionOptions;
-use Phore\MessageQueue\Security\HmacSecurity;
 use Phore\MessageQueue\SubscriptionOptions;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal §§ 13–14.
- * Nach Implementierung: zuerst runServer($dsn, $secret) in Prozess A starten,
- * dann runClient($dsn, $secret) in Prozess B. Beide nutzen denselben Redis-Prefix.
- * replyTopic/replySubscription müssen je gleichzeitig aktiver Client-Instanz
- * eindeutig sein. Die festen Namen unten gelten für genau einen Demo-Client.
+ * Nach Implementierung: zuerst runServer() in Prozess A starten,
+ * dann runClient() in Prozess B. Beide nutzen dasselbe lokale Queue-Verzeichnis.
+ * Der file-Adapter vergibt pro Client einen eigenen Rückkanal; Details in 01-connect.php.
  */
-
-function connect(string $dsn, string $secret, bool $client): MessageQueueInterface
-{
-    return (new ConnectionFactory())->connect($dsn, new ConnectionOptions(
-        security: new HmacSecurity(
-            sharedSecret: $secret,
-            keyId: 'development-1',
-            audience: 'rpc-development',
-        ),
-        rpc: new RpcConnectionOptions(
-            replyTopic: $client ? 'rpc.replies.client-demo' : null,
-            replySubscription: $client ? 'client-demo' : null,
-            allowedReplyTopics: ['rpc.replies.client-demo'],
-        ),
-        autoCreate: true, // Produktion: Ressourcen und ACLs vorher provisionieren.
-    ));
-}
 
 #[MessageType('math.divide.v1', topic: 'calculator')]
 final class Divide
 {
     public function __construct(public float $a, public float $b) {}
 }
+
+// Dieser explizite Fehlertyp darf seine Meldung über den RPC-Rückkanal senden.
+// In einem gemeinsamen SDK können Server und Client dieselbe Klasse verwenden.
+#[RemoteError('math.division_by_zero.v1')]
+final class DivisionByZero extends RemoteException {}
 
 final class DivideHandler
 {
@@ -71,10 +57,7 @@ final class DivideHandler
 
         if ((float) $params['b'] === 0.0) {
             // Erzeugt eine terminale, sichere Fehlerantwort am Rückkanal.
-            throw new CommandFailedException(
-                errorCode: 'DIVIDE_BY_ZERO',
-                publicMessage: 'Division durch null ist nicht möglich.',
-            );
+            throw new DivisionByZero('Division durch null ist nicht möglich.', errorCode: 'DIVIDE_BY_ZERO');
         }
 
         if (abs($params['b']) < 1) {
@@ -91,9 +74,9 @@ final class DivideHandler
     }
 }
 
-function runServer(string $dsn, string $secret): void
+function runServer(): void
 {
-    $mq = connect($dsn, $secret, client: false);
+    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
     try {
         $mq->respond('calculator', 'calculator-workers', [new DivideHandler(), 'divide'],
             new SubscriptionOptions(type: 'math.divide.v1'));
@@ -114,9 +97,9 @@ function runServer(string $dsn, string $secret): void
     }
 }
 
-function runClient(string $dsn, string $secret): void
+function runClient(): void
 {
-    $mq = connect($dsn, $secret, client: true);
+    $mq = new PhoreMQ('file:///tmp/phore-mq-demo');
     try {
         // Publish erkennt das DTO und übernimmt Topic/Typ. Sendet sofort.
         $sent = $mq->publish(new Divide(12, 3));
@@ -157,12 +140,31 @@ function runClient(string $dsn, string $secret): void
         // Beispiel: await(responseClass: LocalResult::class).
         // Reine Events können mit PublishOptions(reply: false) ohne Antwortaufwand senden.
 
+        // 1. Allgemeine Fehlerbehandlung: kein Fehler-Topic abonnieren erforderlich.
         try {
             $mq->publish(new Divide(12, 0))->await(timeoutSeconds: 5);
         } catch (RemoteCommandException $error) {
-            printf("Command fehlgeschlagen [%s]: %s\n", $error->errorCode, $error->getMessage());
-            // Erwartet: DIVIDE_BY_ZERO; keine entfernten PHP-Stacks/Objekte.
+            // Kein lokales Mapping: generische Exception, aber gleiche freigegebene Meldung.
+            printf("Remote-Fehler [%s]: %s\n", $error->errorCode, $error->getMessage());
         }
+
+        // 2. Gewünschte lokale Exception-Klasse ausdrücklich freigeben.
+        try {
+            $mq->publish(new Divide(12, 0))->await(
+                timeoutSeconds: 5,
+                errorTypes: [DivisionByZero::class],
+            );
+        } catch (DivisionByZero $error) {
+            // Gleiche SDK-Klasse und Meldung wie auf dem Server, lokal neu erzeugt.
+            printf("Division korrigieren: %s\n", $error->getMessage());
+        } catch (RemoteCommandException $error) {
+            // Unbekannter anderer Fehler bleibt ein generischer Remote-Fehler.
+            printf("RPC fehlgeschlagen: %s\n", $error->getMessage());
+        }
+        // Alternativ await(new AwaitOptions(errorTypes: [DivisionByZero::class])).
+        // Der Client darf auch eine andere lokale Klasse mit demselben RemoteError-Namen
+        // registrieren. Keine entfernten PHP-Klassennamen, Stacktraces oder unserialize().
+
     } catch (RequestTimeoutException $timeout) {
         // await wirft RequestTimeoutException bei abgelaufener lokaler Wartefrist
         // oder ursprünglicher Antwortdeadline ohne rechtzeitig empfangenes finales Ergebnis.
