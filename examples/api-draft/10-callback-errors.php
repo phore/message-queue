@@ -11,6 +11,7 @@ use function Examples\MessageQueue\demoConnection;
 use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\SubscriptionOptions;
+use Phore\MessageQueue\QueueOptions;
 use Phore\MessageQueue\Exception\RetryableMessageException;
 use Phore\MessageQueue\Exception\RejectMessageException;
 use Phore\MessageQueue\Exception\FailureStoreException;
@@ -42,14 +43,16 @@ function demo(): void
             // Erst erfolgreiche Rückkehr führt bei Auto-Ack zur Bestätigung.
             // Exception NICHT nur loggen und anschließend normal zurückkehren:
             // das würde die fehlgeschlagene Verarbeitung fälschlich bestätigen.
-        }, new SubscriptionOptions(type: 'demo.process.v1'));
+        }, new SubscriptionOptions(type: 'demo.process.v1', queue: QueueOptions::workQueue(
+            maxAttempts: 4, retryDelaySeconds: 2, // Erstversuch zählt mit; jeweils 2 s warten.
+        )));
 
         $mq->publish('jobs.demo', 'demo.process.v1', ['mode' => 'temporary']);
         $mq->publish('jobs.demo', 'demo.process.v1', []);
         $mq->publish('jobs.demo', 'demo.process.v1', ['mode' => 'unexpected']);
 
-        // Vorgeschlagener Standard: 1 erster Versuch + höchstens 3 Wiederholungen,
-        // mit 1/2/4 Sekunden Verzögerung und ohne Jitter. Kein enger Requeue-Loop.
+        // Hier: 1 erster Versuch + höchstens 3 Wiederholungen,
+        // mit jeweils 2 Sekunden Verzögerung; Profildefault wäre 10 s, ohne Jitter. Kein enger Requeue-Loop.
         // RetryableMessageException hebt die Obergrenze NICHT auf.
         // temporary: Erfolg im Versuch 3; fehlendes mode: sofort Fehlerablage;
         // unexpected: nach Versuch 4 Fehlerablage. Insgesamt 8 Zustellversuche.

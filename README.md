@@ -76,3 +76,13 @@ git submodule update --remote --merge
 ```
 
 Projektregel: Ausführbare Beispiele und Setup-Skripte werden ausschließlich in PHP >=8.5 gepflegt; siehe [AGENTS.md](AGENTS.md).
+
+- [QueueOptions: Profile, Defaults, DTO-Attribute und Konflikte](examples/api-draft/11-queue-options.php)
+
+RPC-Beispiel 05 beschreibt getrennte Docker-Publisher/Worker, private Rückkanäle,
+automatisches Entfernen nach Connection-Ende, Request-Zuordnung und persistente
+Idempotenz bei Neustarts. QueueOptions ersetzen separate retryPolicy-Vorgaben;
+Work/RPC verwenden standardmäßig vier Versuche mit jeweils zehn Sekunden Abstand.
+Bestehende Queue-Contracts werden geprüft und bei Konflikt abgelehnt, nicht
+zwischen Container-Versionen automatisch hin- und hergeschrieben. Alles bleibt
+API-Entwurf; keine MQ-Runtime ist durch diese Beispiele implementiert.

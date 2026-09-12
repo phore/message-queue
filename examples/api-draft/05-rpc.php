@@ -16,19 +16,50 @@ use Phore\MessageQueue\Attribute\MessageType;
 use Phore\MessageQueue\PublishOptions;
 use Phore\MessageQueue\RunOptions;
 use Phore\MessageQueue\Rpc\AwaitOptions;
-use Phore\MessageQueue\MessageQueueInterface;
+use Phore\MessageQueue\Exception\ConnectionException;
 use Phore\MessageQueue\Rpc\CommandFailedException;
 use Phore\MessageQueue\Rpc\Notice;
 use Phore\MessageQueue\Rpc\RemoteCommandException;
 use Phore\MessageQueue\Rpc\RequestContext;
 use Phore\MessageQueue\Rpc\RequestTimeoutException;
 use Phore\MessageQueue\SubscriptionOptions;
+use Phore\MessageQueue\QueueOptions;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal §§ 13–14.
  * Nach Implementierung: zuerst runServer() in Prozess A starten,
  * dann runClient() in Prozess B. Beide nutzen denselben RabbitMQ-Namespace.
- * Der RabbitMQ-Adapter vergibt pro Client einen eigenen Rückkanal; Details in 01-connect.php.
+ * RPC-Ablauf (geplante Library, nicht manuell in der Anwendung nachzubauen):
+ * 1. Vor publish: private exklusive Classic-Reply-Queue + eindeutiges Binding
+ *    an gemeinsamer interner Exchange anlegen und Reply-Consumer bestätigen lassen.
+ * 2. Neue requestId lokal registrieren, dann Request mit replyTo/requestId senden.
+ * 3. Ein Worker verarbeitet; return bzw. sichere Exception wird zum Reply.
+ * 4. Reply an genau dieses replyTo senden und bestätigen lassen, dann Request ack.
+ * 5. await liest den Rückkanal und ordnet anhand requestId zu; kein Hintergrundthread.
+ *
+ * Mehrere Publisher: je Connection eigene Queue, mehrere Calls je Queue per ID.
+ * Gleicher Nachrichtentyp ist KEIN gemeinsamer Rückkanal. Worker-Replikate teilen
+ * calculator-workers; Publisher-Replikate teilen niemals ihre Reply-Queue.
+ *
+ * Container-Neustart: Der Publisher verliert lokale Pending-Objekte. RabbitMQ
+ * löscht die exklusive Queue nach erkanntem Verbindungsverlust (nicht zwingend
+ * sofort beim Crash). close() räumt sie auf, Binding wird mit entfernt; die eine
+ * gemeinsame interne Exchange bleibt. Neuer Container bekommt einen neuen Namen.
+ * Ein einzelner await-Timeout löscht die gemeinsam genutzte Queue NICHT.
+ * Nach Wire-Deadline werden Pending-Einträge entfernt, späte Replies verworfen.
+ *
+ * Worker-Crash vor Request-Ack kann Arbeit erneut zustellen: auch nach return
+ * oder nach erfolgreicher Geschäftsaktion! Division ist rein und wiederholbar.
+ * Bei Buchungen/Exports operationId und Ergebnis extern dauerhaft/atomar speichern;
+ * nie nur einen Array-Cache im Container verwenden. Nach Publisher-Neustart mit
+ * derselben operationId bewusst neu anfragen, aber neuer requestId/replyTo.
+ * Der Worker sendet das gespeicherte Ergebnis an das AKTUELLE replyTo zurück.
+ * Unklare Publish-Bestätigung oder Timeout beweist nicht, dass nichts passiert ist.
+ * Ist das alte Reply-Ziel nachweislich gelöscht, keine Geschäftsaktion allein
+ * deswegen wiederholen; Ergebnis sichern und verwaisten Request abschließen.
+ * Bei unklarem Reply-Publish kein Ack. Details/Fehlerfenster: Proposal § 13.6.
+ * Docker: demoConnection nutzt Host-Loopback; in getrennten Containern gemeinsame
+ * Konfiguration auf rabbitmq:5672 und http://rabbitmq:15672 umstellen (Setup).
  */
 
 #[MessageType('math.divide.v1', topic: 'calculator')]
@@ -83,7 +114,7 @@ function runServer(): void
     $mq = new PhoreMQ(...demoConnection());
     try {
         $mq->respond('calculator', 'calculator-workers', [new DivideHandler(), 'divide'],
-            new SubscriptionOptions(type: 'math.divide.v1'));
+            new SubscriptionOptions(type: 'math.divide.v1', queue: QueueOptions::rpc()));
 
         // Gleichwertige Alternative mit Attributen, NICHT zusätzlich registrieren:
         // $mq->registerHandlers(new DivideHandler());
@@ -169,6 +200,11 @@ function runClient(): void
         // Der Client darf auch eine andere lokale Klasse mit demselben RemoteError-Namen
         // registrieren. Keine entfernten PHP-Klassennamen, Stacktraces oder unserialize().
 
+    } catch (ConnectionException $connectionError) {
+        // Transportausfall: offene Calls dieser Connection sind nicht fortsetzbar.
+        // Kein automatisches erneutes publish; bei Schreiboperationen erst den
+        // persistenten operationId-/Ergebnisstatus prüfen. Supervisor darf neu starten.
+        throw $connectionError;
     } catch (RequestTimeoutException $timeout) {
         // await wirft RequestTimeoutException bei abgelaufener lokaler Wartefrist
         // oder ursprünglicher Antwortdeadline ohne rechtzeitig empfangenes finales Ergebnis.

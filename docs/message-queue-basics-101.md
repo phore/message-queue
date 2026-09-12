@@ -178,3 +178,27 @@ Bei Callback-Exceptions sieht der Entwurf begrenzte Wiederholungen mit wachsende
 `check()` unterscheidet Verbindung und nachrichtenspezifische Bereitschaft. Ein erreichbarer Broker beweist noch keinen bereiten Handler; ein fehlendes Ping-Reply beweist nicht die Abwesenheit eines Listeners. Statusmeldungen haben deshalb Quellen und Ablaufzeiten. [Systemcheck](../examples/api-draft/09-system-check.php)
 
 Nicht universell zugesagt werden Exactly-once-Seiteneffekte, globale Reihenfolge, Prioritäten, Replay oder verteilte Locks. Unbekannte Optionen, widersprüchliche Topologie und nicht routbare Nachrichten sollen früh mit aussagekräftigen Exceptions auffallen. Für den Export bedeutet das: Die Queue kann einen verlorenen Zustellversuch ersetzen. Ob eine ZIP-Datei bereits erfolgreich erstellt wurde, muss die Anwendung weiterhin zuverlässig erkennen.
+
+## RPC nach einem Container-Neustart
+
+Zwei Publisher senden denselben Command-Typ. Wer bekommt welche Antwort?
+Jede Verbindung besitzt ein eigenes privates Antwortziel; die Request-ID trennt
+die einzelnen Aufrufe darin. Der Sender richtet Queue, Binding und Consumer vor
+dem Versand ein. await verarbeitet dann die eingehenden Antworten. Der Typ allein
+reicht für diese Zuordnung nicht aus.
+
+Stirbt der Publisher, verschwindet sein Rückkanal nach erkanntem Verbindungsabbruch.
+Der neue Container beginnt mit einem neuen Rückkanal. Ein Timeout beweist deshalb
+nicht, dass die Arbeit fehlgeschlagen ist: Sie kann bereits erledigt sein und nur
+die Antwort fehlen. Für einen neuen Aufruf derselben Geschäftsoperation bleibt
+die extern gespeicherte operationId gleich, während requestId und replyTo neu
+sind. Der Worker kann das gespeicherte Ergebnis zurückgeben. Die Transaktion,
+die Geschäftswirkung und Ergebnis zusammen schützt, gehört zur Anwendung.
+[PHP-RPC-Grundprinzip](https://www.rabbitmq.com/tutorials/tutorial-six-php)
+
+Die geplanten QueueOptions unterscheiden dauerhafte Work-/RPC-Queues und
+flüchtigen Broadcast. Broadcast mit positiver Retention speichert für bereits
+angelegte Empfängergruppen; es liefert keine Historie an später neue Gruppen.
+Ein Ack entfernt die jeweilige Kopie früher. Detaillierter Ablauf mit Kommentaren:
+[RPC-Beispiel](../examples/api-draft/05-rpc.php),
+[Profile und Konflikte](../examples/api-draft/11-queue-options.php).

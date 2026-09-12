@@ -10,6 +10,8 @@ use function Examples\MessageQueue\demoConnection;
 
 use Phore\MessageQueue\Attribute\MessageType;
 use Phore\MessageQueue\Attribute\Subscribe;
+use Phore\MessageQueue\Attribute\Queue;
+use Phore\MessageQueue\QueueProfile;
 use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\SubscriptionOptions;
 use Phore\MessageQueue\Exception\MessageMappingException;
@@ -25,6 +27,8 @@ use Phore\MessageQueue\MessageQueueInterface;
 
 // Feste Gruppe: mehrere Worker mit dieser Vorgabe TEILEN die Zustellungen.
 #[MessageType('user.created.v1', topic: 'users', subscription: 'sdk-users')]
+// Queue-Vorgaben werden beim Subscriber geprüft/angelegt, niemals beim publish.
+#[Queue(profile: QueueProfile::WorkQueue, revision: 1, maxAttempts: 4, retryDelaySeconds: 10)]
 final class T_UserCreated
 {
     public string $userId;

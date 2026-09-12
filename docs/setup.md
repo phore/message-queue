@@ -215,3 +215,41 @@ nicht eingerichtet. Möglicherweise fehlt die Initialisierung des zuständigen
 Dienstes.“ Ein vorhandenes Queue-Ziel ohne laufenden Worker nimmt dagegen
 weiterhin Nachrichten an; aktuelle Dienstbereitschaft wird mit `check()` geprüft.
 Berechtigungsfehler und Verbindungsprobleme bleiben gesonderte Fehler.
+
+## Queue-Profile und RPC in Containern (API-Entwurf)
+
+[11-queue-options.php](../examples/api-draft/11-queue-options.php) zeigt
+`QueueOptions::workQueue()`, `::rpc()` und `::broadcast()` sowie `#[Queue]` am DTO.
+Globale `ConnectionOptions::queueDefaults` füllen offene Werte. Feste DTO-Werte
+und explizite Subscription-Werte müssen übereinstimmen. Unvereinbare vorhandene
+Konfiguration führt zu `QueueConfigurationConflictException`, nötige Neuerstellung
+zu `QueueMigrationRequiredException`; nicht unterstützte Optionskombinationen
+zu `UnsupportedQueueOptionException`. Kein automatisches Policy-Update, auch
+nicht allein wegen einer höheren Revision. Diese Regeln gehören zur geplanten
+Library; das kleine setup.php legt weiterhin nur seine dokumentierten dauerhaften
+Basis-/Fehlerqueues an und verarbeitet keine neuen Profil- oder Revisionsfelder.
+
+Work/RPC speichern Aufträge dauerhaft; maxAttempts zählt den Erstversuch mit,
+retryDelaySeconds ist die feste Wartezeit zwischen regulären Retries (Default
+vier Versuche, jeweils zehn Sekunden). Flüchtiger Broadcast verteilt an aktuell
+registrierte Verbindungen ohne Offline-Garantie. Mit positiver Retention erhält
+jede stabile Empfängergruppe eine dauerhafte Subscription; Ack entfernt ihre
+Kopie früher. maxInFlight begrenzt offene Zustellungen je Consumer, startet keine
+zusätzlichen Worker. Beispiele verwenden weiterhin dieselbe zentrale Verbindung.
+
+[05-rpc.php](../examples/api-draft/05-rpc.php) erklärt Publisher und Subscriber
+als getrennte Container. Vor dem Request wird pro Publisher-Verbindung eine
+private Reply-Queue samt Consumer eingerichtet; Request-ID und replyTo ordnen
+Antworten zu. Mehrere Publisher teilen diese Queue nicht. Ein Timeout beendet
+nur das Warten. close bzw. erkannter Verbindungsverlust entfernt die private
+Queue samt Binding; die gemeinsame interne Exchange bleibt bestehen.
+Ein neuer Container bekommt einen neuen Rückkanal und übernimmt keine offenen
+Aufrufe. Für das Wiederaufnehmen schreibender Operationen müssen Vorgangs-ID und
+Ergebnis außerhalb des Containers atomar gespeichert werden. Vollständige
+Fehlerfenster und Cleanup-Limits stehen im Proposal §§ 13.2 und 13.6.
+
+Container im Compose-Netz verwenden den Dienstnamen rabbitmq statt 127.0.0.1;
+die zentrale Connection muss dann `amqp://demo:demo@rabbitmq:5672/demo` und
+managementUrl `http://rabbitmq:15672` enthalten. Der lokale setup.php-Aufruf läuft
+weiter auf dem Host mit seiner Host-Konfiguration. Es werden nur zwei einzelne
+Ports veröffentlicht, keine Port-Range: 5672 für AMQP und 15672 für Management.

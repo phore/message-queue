@@ -14,16 +14,17 @@
 | 2026-09-12 | dermatthes | §§ 1–5, 7–16: RabbitMQ als einzige Umsetzung beschlossen; Interface ohne Austauschlogik, neutrale Konfiguration, Docker-Setup und Beispiele vereinheitlicht |
 | 2026-09-12 | dermatthes | §§ 1, 10: PHP 8.5 als Mindestversion und ausschließlich PHP-Beispiele/Setup festgelegt |
 | 2026-09-12 | dermatthes | §§ 2, 7, 11: Listener provisionieren; Publisher werfen bei fehlender Topologie QueueConfigurationMissingException |
+| 2026-09-12 | dermatthes | §§ 1–5, 7, 11, 13: QueueOptions-Profile, Konfliktvertrag und RPC-Rückkanäle bei Container-Neustarts konkretisiert |
 
 ## § 1 Abstract und Lieferumfang
 
 **Architekturentscheidung, 2026-09-12: Die erste Umsetzung verwendet ausschließlich RabbitMQ über AMQP 0-9-1.** Ein `RabbitMQConnector` implementiert `ConnectorInterface`; die MQ-Logik spricht nur dieses Interface an. Es gibt keine Adapterregistrierung, Treiberauswahl, Capability-Aushandlung, Fallbacks oder Laufzeit-Austauschlogik. Die Interface-Grenze ermöglicht spätere Änderungen, ohne heute zusätzliche Broker zu entwerfen.
 
-Die frameworkunabhängige PHP-Library bietet Topics, dauerhafte Subscriptions,
+Die frameworkunabhängige PHP-Library bietet Topics, dauerhafte und flüchtige Subscriptions,
 konkurrierende Worker, optionale strukturelle `phore/schema`-Hydration und
 PHP-Attribute. `PhoreMQ` akzeptiert DSN oder Adapter mit `ConnectionOptions`.
 RPC, Fehlerantworten, Metadaten, Middleware und Systemcheck bleiben Bestandteil
-des Entwurfs. Signierung und Dateireferenzen behalten ihre fachlichen Verträge.
+des Entwurfs. Signierung und Dateireferenzen behalten ihre fachlichen Verträge. [geändert]
 
 **Die PHP-API ist noch nicht implementiert.** Composer-Metadaten und Autoloading
 stammen aus der Vorlage; die PHP-Mindestversion ist verbindlich >=8.5.
@@ -35,7 +36,7 @@ zu schreiben; verbindliche Projektregeln stehen in [AGENTS.md](../../AGENTS.md).
 | Umfang | Entscheidung |
 |---|---|
 | Transport | Genau ein RabbitMQ-Adapter hinter `ConnectorInterface` |
-| Zustellung | Dauerhafte Subscriptions, Quorum Queues, Publisher Confirms, Ack nach Handler-Erfolg |
+| Zustellung | Work/RPC dauerhaft mit Quorum Queues; Broadcast optional flüchtig; Confirms und explizites Settlement |
 | API | `publish`, `subscribe`, `respond`, `run`, optional `await`; `check` für Diagnose |
 | Konfiguration | Generische Namen; `topic`, `subscription`, `type`, `namespace`, `maxInFlight`, `autoCreate` |
 | Entwicklung | Derselbe RabbitMQ-Adapter gegen einen Docker-Broker |
@@ -91,7 +92,7 @@ verwaltet die Library. Details und standardisierter Vertrag in § 16.
 | Topic | Logischer Nachrichtenkanal, etwa `users`; unabhängig vom Backendnamen |
 | Message type / Subject | Fachlicher Vertrag und Routingbezeichnung, etwa `user.created.v1`; API-Name ist ausschließlich `type`, kein zusätzliches Subject-Argument |
 | Namespace | Isolierter Namensraum aus dem DSN-Pfad, etwa `demo`; im Adapter auf einen Virtual Host abgebildet |
-| Subscription | Dauerhafte benannte Sicht auf ein Topic, etwa `billing-users` |
+| Subscription | Benannter Empfangsvertrag auf einem Topic; Work/RPC dauerhaft, Broadcast optional flüchtig |
 | Worker | Ein Prozess, der für eine Subscription arbeitet; mehrere teilen sich die Arbeit |
 | Envelope | Transportneutrale Metadaten, JSON-Payload und Attachment-Deskriptoren |
 | Delivery | Eine konkrete Zustellung inklusive opaque Receipt und Ack-/Retry-Steuerung |
@@ -107,22 +108,23 @@ alle passenden benannten Subscriptions; „an einen“ einen ausgewählten Worke
 innerhalb derselben Subscription. Die Subscription-Topologie bestimmt das
 Verhalten, kein zusätzlicher Broadcast-Schalter beim Senden. Beispiele in § 15.
 
-Der Grundvertrag lautet **at least once innerhalb der konfigurierten
+Für dauerhafte Profile lautet der Grundvertrag **at least once innerhalb der konfigurierten
 Aufbewahrung und Verfügbarkeit**. Doppelte Zustellungen sind möglich, ebenso
 eine unklare Publish-Bestätigung bei Verbindungsabbruch.
 `SendResult::receipt` enthält ein `PublishReceipt`: Es bestätigt Backend-Annahme,
 keine Verarbeitung durch Empfänger. `SendResult::await()` liefert dagegen die
 fachliche Antwort eines Responders, keine Bestätigung aller Subscriber. Es gibt keine
 Exactly-once-Garantie und keine globale Reihenfolge.
-Fachliche Seiteneffekte benötigen eine stabile fachliche Idempotenz-ID; Wiederzustellungen behalten zusätzlich dieselbe `messageId`.
+Fachliche Seiteneffekte benötigen eine stabile fachliche Idempotenz-ID; Wiederzustellungen behalten zusätzlich dieselbe `messageId`. [geändert]
 
 `subscribe()` bindet eine benannte Subscription und prüft ihren Vertrag.
 Eine neu angelegte Subscription empfängt erst Nachrichten ab Erstellung ihrer
-Bindung. Ein bestehender Rückstand bleibt bei Worker-Neustarts erhalten.
+Bindung. Ein bestehender dauerhafter Rückstand bleibt bei Worker-Neustarts erhalten.
 Es gibt weder Start-Cursor noch Replay-Option. In Produktion werden fachliche
 Topics und Subscriptions vorab eingerichtet. `autoCreate: true` erlaubt
 explizit ihre dynamische Anlage beim Registrieren von Listenern; `cancel()` beendet nur den lokalen Consumer,
-löscht aber weder Subscription noch Rückstand.
+löscht aber weder dauerhafte Subscription noch Rückstand. Flüchtige exklusive
+Queues werden beim Ende ihrer Verbindung beziehungsweise ihres letzten Consumers entfernt. [geändert]
 
 ## § 3 Abstraktionsschichten und Erweiterungspunkte
 
@@ -137,7 +139,7 @@ löscht aber weder Subscription noch Rückstand.
 | `MessageSecurityInterface` | Unveränderliche Nachrichtenbytes schützen und vor Verwendung verifizieren |
 | `ConnectorInterface` | RabbitMQ kapseln: Topologie prüfen/anlegen, Bytes senden/empfangen und Zustellungen abschließen |
 | `PayloadStoreInterface` | Streams ablegen, Referenzen auflösen, Lebensdauer verwalten |
-| `RetryPolicy` / `FailureStoreInterface` | Vorübergehende Fehler wiederholen, endgültige Fehler sicher ablegen |
+| `QueueOptions` / `FailureStoreInterface` | Profile und Retry-Optionen auflösen, endgültige Fehler sicher ablegen |
 
 Sendepfad: Typ/Topic auflösen → Send-Middleware ausführen → Daten normalisieren
 und ggf. validieren → Dateien ablegen → Envelope kodieren → signieren → Größenprüfung
@@ -199,9 +201,9 @@ Optionen schlägt früh mit `InvalidConfigurationException` fehl.
 `ConnectionOptions` bündelt `autoCreate` (Standard false), den expliziten
 `managementUrl` für Topologieprüfungen, `maxInFlight`
 (Standard 1, positive Ganzzahl), Security, Registry, optionale Schema-Bridge,
-RPC, Health, Middleware und optionalen PayloadStore. Konfiguration wird als
+RPC, Health, Middleware, `queueDefaults` als `QueueOptions` und optionalen PayloadStore. Konfiguration wird als
 Snapshot übernommen; bewusst geteilte Zustandsobjekte wie `HealthState`
-bleiben geteilt. Unbekannte Optionen sind Fehler.
+bleiben geteilt. Unbekannte Optionen sind Fehler. [geändert]
 
 `ConnectionOptions::fromArray(array $values, ?ConnectionOptions $overrides = null)`
 ist ein geplanter Konfigurationshelfer, keine existierende Implementierung.
@@ -288,9 +290,8 @@ auch als Alias, da die API noch nicht implementiert ist.
 
 `SubscriptionOptions` enthält optional `topic` und `subscription` für die
 Callback-Kurzform sowie `type` als exakten Filter,
-`payloadClass` als lokale Zielklasse, `ackMode` und `retryPolicy`.
-Fachliche Subscriptions sind immer dauerhaft; es gibt keine Cursor-, Replay-
-oder wechselbaren Haltbarkeitsmodi.
+`payloadClass` als lokale Zielklasse, `ackMode` und `queue: QueueOptions`.
+Profile legen Haltbarkeit und Retry fest (§ 7.2); Cursor und Replay sind nicht vorgesehen. [geändert]
 Ohne Typfilter muss der Array-Handler alle
 Nachrichtentypen des Topics verarbeiten können. Das Binding filtert bereits bei der Zustellung in die Queue. Ein dennoch
 eingehender unpassender Frame ist ein Routing-/Validierungsfehler und wird
@@ -557,7 +558,7 @@ nur im Adapter, Deployment und zur Erklärung der konkreten Abbildung.
 | Namespace | Virtual Host aus dem DSN-Pfad |
 | Topic `users` | Dauerhafte Topic-Exchange `phore.topic:users` |
 | Typ / Subject `user.created.v1` | Exakter Routing Key; keine eigene Ressource |
-| Subscription `audit-users` | Dauerhafte Quorum Queue `phore.sub:users:audit-users` |
+| Subscription `audit-users` (Work/RPC oder Broadcast mit Retention) | Dauerhafte Quorum Queue `phore.sub:users:audit-users` |
 | Subscription ohne Typfilter | Binding mit `#`; empfängt alle Typen dieses Topics |
 | Subscription mit `type` | Binding mit genau diesem Typ; keine öffentliche Wildcard-Sprache |
 | `maxInFlight` | Consumer-Prefetch; keine Zahl parallel ausgeführter PHP-Callbacks |
@@ -583,7 +584,7 @@ Diese besitzt `reason`, `topic` und `messageType`; erlaubte Gründe sind
 `TOPIC_MISSING` und `NO_MATCHING_SUBSCRIPTION`. Beispielmeldung:
 „Für Topic users und Typ user.created.v1 fehlt die Queue-Konfiguration.
 Möglicherweise wurde der zuständige Listener-Dienst noch nicht initialisiert.“
-Keine Credentials oder Payloads in dieser Diagnose. [neu]
+Keine Credentials oder Payloads in dieser Diagnose.
 
 Der Fehler entsteht direkt bei `publish`/`request`, nicht erst bei `await`.
 Eine Vorabprüfung ersetzt weder `mandatory` noch Publisher Confirms: Wird die
@@ -592,24 +593,24 @@ in denselben Fehlervertrag übersetzt. Rechtefehler, Verbindungsabbrüche und
 unklare Publish-Bestätigungen behalten ihre eigenen Exceptions; sie beweisen
 keine fehlende Konfiguration und erlauben keinen blinden automatischen Retry.
 Die internen, ausdrücklich aktivierten RPC-Rückkanäle aus § 13.1 bleiben davon
-getrennt; sie erzeugen keine fachliche Empfänger-Subscription. [neu]
+getrennt; sie erzeugen keine fachliche Empfänger-Subscription.
 
 Eine vorhandene passende dauerhafte Subscription ohne aktiven Worker ist
 weiterhin ein gültiges Versandziel und sammelt Backlog. Die Exception sagt
 nichts Sicheres über einen fehlenden Container aus. Für aktuelle Listener-
 Bereitschaft und alle erwarteten Empfänger dient `check()`; ein routbares
-Publish allein beweist nur mindestens ein passendes Ziel. [neu]
+Publish allein beweist nur mindestens ein passendes Ziel.
 
 `subscribe` validiert/anlegt Exchange, Queue und Binding gemäß `autoCreate`.
 Identische Definitionen sind wiederholbar. Abweichende Typfilter, Queue-Eigenschaften
-oder Namensbindungen werfen `TopologyConflictException`; kein automatisches
+oder Namensbindungen werfen `QueueConfigurationConflictException`; kein automatisches
 Löschen oder Umbauen gefüllter Queues. `autoCreate: false` prüft nur.
 Eine passive AMQP-Queue-Prüfung beweist nicht die vollständige Binding-Konfiguration;
 strikte Prüfung nutzt die über `managementUrl` konfigurierte Management-API
 mit passenden Rechten. Deren Zugang verwendet die expliziten Verbindungscredentials;
 produktive Endpunkte müssen HTTPS mit Zertifikatsprüfung verwenden. Keine
 ableitende URL-Heuristik und kein Fallback nach fehlgeschlagener Prüfung. Ohne Prüfmöglichkeit folgt
-`TopologyVerificationException`, keine Behauptung erfolgreicher Vollprüfung.
+`TopologyVerificationException`, keine Behauptung erfolgreicher Vollprüfung. [geändert]
 
 Retry-Veröffentlichungen gehen ausschließlich über ein internes Ziel zurück
 an dieselbe Subscription, niemals erneut über die fachliche Topic-Exchange.
@@ -628,6 +629,74 @@ Die Fehlerqueue erhält keine automatische Ablaufzeit. Betriebsseitige Limits
 werden bewusst gesetzt und überwacht; die Demo ist kein Hochverfügbarkeitscluster.
 
 ### § 7.1 Was andere PHP-Abstraktionen bereits vorsehen [gelöscht]
+
+### § 7.2 QueueOptions: Profile, Defaults und Konflikte
+
+`respond($callback)` und `#[Respond]` nutzen denselben Resolver für den ersten
+DTO-Parameter wie subscribe; nur fehlende Metadaten müssen explizit ergänzt werden. [neu]
+
+`QueueOptions` ist das gemeinsame immutable Optionsobjekt für programmatische
+Registrierung und `#[Queue]` am Nachrichten-DTO. `QueueOptions::workQueue()`,
+`::rpc()` und `::broadcast()` sind benannte Konstruktoren desselben Objekts.
+`new QueueOptions(...)` setzt nur die ausdrücklich genannten Felder. Profilfabriken setzen nur das Profil und explizite Argumente; Defaults werden erst
+beim Auflösen ergänzt. Alle Beispiele
+stehen in [11-queue-options.php](../../examples/api-draft/11-queue-options.php). [neu]
+
+| Feld | Bedeutung und Default |
+|---|---|
+| `profile` | `QueueProfile::WorkQueue`, `Rpc` oder `Broadcast`; subscribe ohne Vorgabe WorkQueue, respond Rpc |
+| `revision` | Positive Contract-Version, Default 1; keine automatische Migrationsfreigabe |
+| `retentionSeconds` | Positive maximale Wartezeit in der Subscription; `null` unbegrenzt bei Work/RPC, beim Broadcast ohne Offline-Aufbewahrung; 0 ungültig |
+| `maxInFlight` | Positive Anzahl offener Zustellungen je Consumer; fällt auf ConnectionOptions.maxInFlight (Default 1) zurück; erzeugt keine Worker |
+| `maxAttempts` | Mindestens 1; Work/RPC Default 4 inklusive Erstversuch, Broadcast Default 1 |
+| `retryDelaySeconds` | Positive feste Retry-Wartezeit, Default 10; kein sleep im Handler und kein Jitter |
+
+Work und RPC nutzen dauerhafte Quorum Queues und eine bestätigte Fehlerablage.
+RPC ergänzt den Antwortvertrag; das Profil allein macht aus einem subscribe-Handler
+keinen Responder. Broadcast ohne Retention nutzt eine exklusive, nicht dauerhafte
+Classic Queue je registrierter Verbindung mit eigenem Binding; der physische Name
+enthält einen zufälligen Verbindungsteil. Es erreicht die beim Versand gebundenen
+Instanzen, ohne Offline-Garantie. Nach Callback-Erfolg wird die jeweilige Kopie
+bestätigt; ohne Retry wird ein Fehler diagnostiziert und endgültig verworfen.
+Redelivery nach Transportfehler ist trotzdem möglich. Broadcast mit positiver
+Retention verwendet dauerhafte Quorum Queues und stabile Subscription-Namen:
+je Empfängergruppe ein anderer Name, gleiche Namen teilen Arbeit. Endgültige
+Fehler gehen dort in die Fehlerablage. Neue Gruppen bekommen keine Historie. [neu]
+
+Retention ist eine maximale Verweildauer für wartende Nachrichten, keine
+Mindestaufbewahrung nach Ack und kein Ausführungstimeout. Die Abbildung nutzt
+Nachrichten-TTL der Queue (x-message-ttl, nicht x-expires); bereits laufende Handler werden dadurch nicht abgebrochen. Retries
+bewahren zusätzlich die ursprüngliche Ablaufzeit, statt den Auftrag durch jede
+Wartequeue zu verjüngen. Abgelaufene Work/RPC-Aufträge gehen in die Fehlerablage;
+RPC sendet nur bei noch gültiger Antwortfrist eine sichere terminale Fehlerantwort. [neu]
+
+Defaults füllen offene Felder: feste DTO-Werte und explizite Subscription-Werte
+müssen übereinstimmen; diese Werte haben Vorrang vor `ConnectionOptions::queueDefaults`,
+danach folgen Profildefaults. Das Queue-Attribut setzt dieselben Felder wie das
+Optionsobjekt. Unpassende Kombinationen (etwa flüchtiger Broadcast mit Retries)
+werfen `UnsupportedQueueOptionException` mit Option und Begründung. Ein DTO ohne
+festes Topic darf auf mehreren Topics verwendet werden; seine Queue-Vorgaben
+gelten dann für jede Registrierung. Queue-Eigenschaften gelten pro Subscription,
+nicht pro PHP-Klasse. Das bestehende einzelne Binding/Typfilter-Modell bleibt erhalten. [neu]
+
+Bei Registrierung wird der vollständige Contract vor Consumerstart verglichen.
+Fehlend: mit autoCreate anlegen. Identisch: wiederverwenden. Widersprüchlich:
+`QueueConfigurationConflictException` mit `topic`, `subscription`, `option`,
+`actual`, `requested`, `actualRevision` und `requestedRevision`. Benötigt eine
+Änderung Neuerstellung, folgt deren Unterklasse `QueueMigrationRequiredException`.
+Keine heimliche Löschung, kein Downgrade und kein automatisches Policy-Update.
+Auch eine höhere Revision verlangt zunächst eine explizite Migration. [neu]
+
+Ein dauerhaftes Contract-Register muss auch Library-Werte wie Retry-Intervall
+atomar vergleichen und beim ersten Anlegen unveränderlich festhalten. Seine
+interne Persistenz und Compare-and-create-Implementierung sind vor dem Runtime-Bau
+noch festzulegen und mit gleichzeitig startenden Containern zu prüfen. Beliebige
+AMQP-Metadaten oder eine Revisionsnummer allein sind dafür keine zugesicherte
+Vergleichsoperation. Bis zu dieser Implementierung wird kein vollständiger
+revisionssicherer Abgleich als verfügbar behauptet. Broker-Eigenschaften werden
+zusätzlich direkt geprüft; Teilanlage startet keinen Consumer. Das Setup-Skript
+liefert noch kein Contract-Register. Automatische Upgrades bleiben zurückgestellt;
+kein Listener darf bestehende Policies überschreiben. [neu]
 
 ## § 8 Transparente Sicherheit
 
@@ -740,7 +809,7 @@ Payload, Secret, signierter Download-Link oder Receipt im normalen Fehlertext.
 |---|---|
 | `InvalidDsnException` | Ungültiger Port oder unbekannte Option; Konfiguration korrigieren |
 | `MissingDependencyException` | RabbitMQ-Client oder benötigte Schema-Bridge fehlt; vor Workerstart abbrechen |
-| `TopologyConflictException` / `TopologyVerificationException` | Deklaration widerspricht bestehender Topologie oder kann nicht vollständig geprüft werden |
+| `QueueConfigurationConflictException` / `TopologyVerificationException` | Deklaration widerspricht bestehender Topologie oder kann nicht vollständig geprüft werden |
 | `QueueConfigurationMissingException` | Fachliches Topic fehlt oder keine passende Subscription; Grund `TOPIC_MISSING` oder `NO_MATCHING_SUBSCRIPTION` |
 | `ConnectionException` / `AuthenticationException` | Netzwerkproblem retrybar; falsche Credentials nicht endlos wiederholen |
 | `PublishException` | Annahme fehlgeschlagen oder unbekannt; `outcome` = rejected/unknown |
@@ -777,7 +846,8 @@ Command-Fehler und ändert die Settlement-Entscheidung nicht.
 direkt im Handler; [Beispiel 06](../../examples/api-draft/06-metadata-middleware.php)
 zeigt das sichere Weiterwerfen nach Diagnose. Bei Auto-Ack bedeutet eine
 Exception vor Settlement: kein Erfolgs-Ack. Die Runtime fängt behandelbare
-`Throwable`s an der Handlergrenze ab und entscheidet nach folgender Policy.
+`Throwable`s an der Handlergrenze ab und entscheidet bei dauerhaften Profilen
+nach folgender Policy; flüchtiger Broadcast folgt § 7.2. [geändert]
 
 | Callback-Ergebnis | Standard im Entwurf |
 |---|---|
@@ -789,15 +859,15 @@ Exception vor Settlement: kein Erfolgs-Ack. Die Runtime fängt behandelbare
 | Infrastrukturfehler bei Retry/Ack/FailureStore | Kein vorgetäuschter Erfolg; `run` wirft Infrastruktur-Exception, unbestätigte Nachricht bleibt wiederholbar |
 
 Vorgeschlagene Default-Policy: höchstens vier Versuche insgesamt, also drei
-Wiederholungen, mit 1, 2 und 4 Sekunden Verzögerung. Feste Wartequeues halten
+Wiederholungen, jeweils mit 10 Sekunden Verzögerung. Feste Wartequeues halten
 den ersten Retry-Aufbau überschaubar; frei wählbarer Jitter ist nicht vorgesehen. `context->attempt` beginnt bei 1 und wird dauerhaft je Zustellung an
 eine Subscription geführt; bestätigte Retry-Übergaben erhöhen den Zähler
 dauerhaft. Prozessneustart setzt diesen Stand nicht zurück. Ein Crash vor
 der Retry-Übergabe kann denselben Versuch wiederholen: vier Versuche sind eine
-Grenze der regulären Handler-Retry-Runden, keine Exactly-once-Ausführungszählung. Die Policy bleibt über `SubscriptionOptions::retryPolicy`
-austauschbar. Diese Defaults sind unsere Designentscheidung, keine Zusage des
+Grenze der regulären Handler-Retry-Runden, keine Exactly-once-Ausführungszählung. Die Werte stehen ausschließlich in `SubscriptionOptions::queue` als
+`QueueOptions(maxAttempts: 4, retryDelaySeconds: 10)`; ein separates `retryPolicy` entfällt. Diese Defaults sind unsere Designentscheidung, keine Zusage des
 Brokers. Ein laufender Retry blockiert nicht durch sleep den ganzen Worker;
-der Job wird verzögert wieder verfügbar.
+der Job wird verzögert wieder verfügbar. [geändert]
 
 Nach endgültiger Ablehnung oder ausgeschöpften Versuchen wird zuerst der
 FailureStore sicher bestätigt, dann die Ursprungszustellung beendet. Ohne
@@ -880,25 +950,27 @@ DTO. Ein skalarer Wert wird explizit als `['value' => ...]` verpackt.
 
 ### § 13.1 Einmalige Konfiguration und Aufruf
 
-`ConnectionOptions::rpc` nimmt `RpcConnectionOptions` entgegen. Bei
-`enabled: true` erzeugt der Adapter vor dem ersten antwortfähigen Publish ein
-zufällig eindeutiges Reply-Topic samt exklusiver, automatisch gelöschter Classic-Reply-Queue
-pro Client unter `replyNamespace` (Demo `_phore.rpc`). Das ist eine ausdrücklich
-aktivierte Ausnahme zur rein vorab angelegten fachlichen Topologie; passende
-Configure-/Read-/Write-Rechte für den reservierten Bereich sind erforderlich,
-auch bei `autoCreate: false`. Der Responder akzeptiert ausschließlich erlaubte
-Reply-Ziele im konfigurierten Namespace; Zugang und Identität werden zusätzlich geprüft.
+`ConnectionOptions::rpc` nimmt `RpcConnectionOptions` entgegen. Bei `enabled: true`
+richtet der Adapter vor dem ersten antwortfähigen Publish eine private, zufällig
+benannte Classic-Reply-Queue pro Verbindung ein: nicht dauerhaft, exklusiv und
+auto-delete. Alle Clients nutzen eine gemeinsame interne Topic-Exchange unter
+`replyNamespace` (Demo `_phore.rpc`), aber jede Queue erhält ein eigenes, exakt
+eindeutiges Binding. Es entsteht keine Exchange je Container. Die interne
+Exchange bleibt als begrenzte gemeinsame Infrastruktur bestehen. Diese Einrichtung
+ist auch bei `autoCreate: false` erlaubt; Rechte dafür sind explizit erforderlich. [geändert]
 
-Der interne Reply-Consumer wird vor Publish eingerichtet, einschließlich des
-Korrelationsregisters. Er teilt seine Queue niemals mit anderen Clients.
-Der Adapter verwendet reguläre Reply-Queues, kein verlustbehaftetes Direct Reply-to.
-Replies können nach Client-Verbindungsabbruch verloren gehen; offene Aufrufe
-enden mit Verbindungsfehler oder Timeout. Dies ist kein dauerhaftes RPC-Ergebnisarchiv.
-Konfigurierbare feste `replyTopic`/`replySubscription` bleiben für einen expliziten
-zentralen Demultiplexer möglich; unabhängige Clients dürfen sie nicht gemeinsam
-als konkurrierende Consumer verwenden. Der Server kann `allowedReplyTopics`
-zusätzlich auf konkrete Ziele einschränken. Anzahl, Bytes und Lebensdauer des
-Rückkanals bleiben begrenzt.
+Vor Publish müssen Queue, Binding und Consumer bestätigt eingerichtet sein;
+anschließend wird die neue Request-ID im lokalen Register aufgenommen. Erst dann
+geht der Request mit geschütztem `replyTo` und `requestId` an die Work-Queue.
+`await()` betreibt den Dispatcher; es startet weder einen Hintergrundthread noch
+sendet es erneut. Bis dahin puffert der Broker Antworten. Mehrere Aufrufe teilen
+den Rückkanal ihrer Connection, niemals den eines anderen Publishers. [geändert]
+
+Feste gemeinsame Reply-Queues und ein konfigurierbarer zentraler Demultiplexer
+entfallen aus der ersten API. Der Adapter nutzt kein Direct Reply-to. Ein Reply-Ziel
+wird auf reservierten Namespace, zulässige Identität und Authentizität geprüft;
+eine UUID ist kein Berechtigungsnachweis. Rückkanal und Pending-Register werden
+nach Anzahl, Bytes und Lebensdauer begrenzt (§ 13.6). [geändert]
 
 `RequestOptions` ergänzt `timeoutSeconds` (Default 30 Sekunden ab `request`,
 nicht ab `await`), `metadata`, optional `responseClass` und `onNotice`.
@@ -952,14 +1024,15 @@ Wer Antworten aller Teilnehmer braucht, verwendet `publish` plus eine
 aggregierende Subscription wie in § 15.2; hierfür wird keine mehrdeutige
 `request(all: true)`-Option oder zusätzliche Queue-Methode eingeführt.
 
-Auf dem Server folgen Antwort-Publish und dessen Bestätigung **vor** dem Ack
-des Requests. Bei unklarer Antwortannahme bleibt der Request wiederholbar.
+Bei vorhandenem Rückkanal folgen Antwort-Publish und dessen Bestätigung **vor** dem Ack
+des Requests. Für ein nachweislich verschwundenes Antwortziel gilt § 13.6.
+Bei unklarer Antwortannahme bleibt der Request wiederholbar.
 Ein Crash zwischen fachlicher Aktion, Reply-Publish und Request-Ack kann
 mehrfache Ausführung/Replies erzeugen. Für verändernde Commands sind eine
 idempotente Operation sowie ein persistenter Request-/Ergebnisspeicher mit
 atomarer Anwendungsanbindung nötig: bekannte fertige Requests senden das
 gespeicherte Ergebnis erneut, ohne die Aktion zu wiederholen. Dies ist keine
-Exactly-once-Garantie der Queue und kein still aktivierter globaler Cache.
+Exactly-once-Garantie der Queue und kein still aktivierter globaler Cache. [geändert]
 
 Ein Timeout begrenzt nur das lokale Warten: Der Server kann noch arbeiten
 oder bereits fertig sein. Vor Handlerstart wird die geschützte Deadline
@@ -1147,6 +1220,51 @@ Client-Catch einschließlich Meldung. Vorgesehene Tests: gleiche/andere lokale
 Klasse, unbekannter Fehlername, doppelte Allowlist-Namen, keine Offenlegung
 technischer Rohfehler, manipulierter Fehlerframe, Timeout versus Remote-Fehler
 und wiederholtes await ohne erneute Ausführung des Commands.
+
+### § 13.6 RPC bei mehreren Docker-Containern und Neustarts
+
+[05-rpc.php](../../examples/api-draft/05-rpc.php) enthält den Ablauf direkt als
+Kommentare. Publisher A und B haben getrennte Verbindungen und Rückkanäle;
+ihre zufällig eindeutigen Request-IDs trennen zusätzlich gleichzeitige Calls.
+Worker derselben Subscription konkurrieren um die Requests. Sie senden die
+Antwort ausschließlich an das geschützte aktuelle replyTo, mit der zugehörigen
+requestId, nicht an ein allgemeines Ergebnis-Topic. [neu]
+
+| Ereignis | Verhalten und Konsequenz |
+|---|---|
+| Erfolgreiche Antwort | Erster verifizierter terminaler Reply beendet genau einen Call; Ergebnis vor Request-Ack bestätigt |
+| Lokaler await-Timeout | RequestTimeoutException; kein Cancel und kein erneutes Senden; bei verbleibender Wire-Frist darf derselbe SendResult erneut warten |
+| Wire-Deadline abgelaufen | Pending-Eintrag entfernen; späte/unbekannte Replies bestätigen und verwerfen, begrenzte Diagnose |
+| close / Consumer-Cancel | Private Queue samt Binding löschen; die gemeinsame interne Exchange bleibt |
+| Publisher hart beendet | Exklusive Queue wird gelöscht, sobald der Broker den Verbindungsverlust erkennt, ggf. erst nach Heartbeat-/Netzwerk-Timeout |
+| Publisher neu gestartet | Neue Connection, neue Queue, leeres Register; alte PHP-Aufrufe und Antworten werden nicht übernommen |
+| Worker vor Ack beendet | Unbestätigter Request kann erneut zugestellt werden, auch wenn die Geschäftsaktion bereits ausgeführt wurde |
+| Reply-Ziel nachweislich verschwunden | Sichere Diagnose; nach gesichertem Ergebnis Request abschließen, keine erneute Geschäftsaktion nur wegen fehlenden Clients |
+| Reply-Publish unklar / Verbindung weg | Kein Erfolgs-Ack; Wiederzustellung möglich, Ergebnis über Idempotenz wiederverwenden |
+
+Die Library begrenzt Reply-Queues auf 1000 Nachrichten und 16 MiB mit
+reject-publish statt stiller Verdrängung; Reply-Nachrichten erhalten höchstens
+die verbleibende Antwortfrist als TTL. Das Pending-Register nimmt höchstens 1000
+Calls pro Connection auf und weist weitere vor Publish ab. Diese internen
+Startwerte sind Entwurfsentscheidungen. Cleanup erfolgt bei Dispatcher-/API-
+Aktivität, spätestens bei close; ohne Eventloop gibt es keinen PHP-Hintergrundtimer.
+Broker-TTL bleibt unabhängig davon wirksam. [neu]
+
+Für verändernde Commands muss die Anwendung eine stabile operationId außerhalb
+des Containers speichern und bei bewusstem Wiederanlauf wiederverwenden. Eine
+neue Übertragung bekommt trotzdem eine neue requestId und den neuen Rückkanal.
+Der Worker prüft operationId plus Parameterfingerprint und speichert Aktion und
+Ergebnis atomar in seiner Datenbank; konkurrierende Zugriffe brauchen Unique-Key
+und Transaktionsschutz. Gespeicherte Ergebnisse werden in einen neuen Reply mit
+der aktuellen requestId/replyTo verpackt. Externe Nebenwirkungen brauchen eigene
+Idempotenz bzw. Outbox/Fencing. Der Ergebnisspeicher muss länger leben als die
+zulässigen Wiederholungen; er ist eine Anwendungsabhängigkeit, kein Container-RAM.
+Timeout bedeutet unbekannter Ausgang, nicht nachgewiesener Misserfolg. [neu]
+
+Grundlagen: [RabbitMQ PHP RPC](https://www.rabbitmq.com/tutorials/tutorial-six-php),
+[temporäre/exklusive Queues](https://www.rabbitmq.com/docs/queues) und
+[Confirms und Acks](https://www.rabbitmq.com/docs/confirms). Die konkreten
+QueueOptions-, Cleanup- und Fehlerverträge oben sind Entscheidungen dieser Library. [neu]
 
 ## § 14 Metadaten, Middleware und API-Entscheidung
 

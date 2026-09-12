@@ -13,6 +13,7 @@ use Phore\MessageQueue\Rpc\CommandFailedException;
 use Phore\MessageQueue\Rpc\RequestContext;
 use Phore\MessageQueue\Rpc\RequestOptions;
 use Phore\MessageQueue\SubscriptionOptions;
+use Phore\MessageQueue\QueueOptions;
 
 /**
  * API-ENTWURF, noch nicht ausführbar. Proposal § 15.3.
@@ -41,7 +42,7 @@ function runWorker(string $workerId): void
 
                 // Reine, wiederholbare Verarbeitung ohne externe Seiteneffekte.
                 return ['normalized' => $text, 'bytes' => strlen($text), 'sha256' => hash('sha256', $text)];
-            }, new SubscriptionOptions(type: 'text.process.v1'));
+            }, new SubscriptionOptions(type: 'text.process.v1', queue: QueueOptions::rpc()));
         $mq->run();
     } finally {
         $mq->close();
