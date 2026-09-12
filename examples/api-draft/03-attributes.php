@@ -13,7 +13,6 @@ use Phore\MessageQueue\Exception\InvalidHandlerException;
 use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\MessageQueueInterface;
-use Phore\MessageQueue\RunOptions;
 use Phore\MessageQueue\Schema\PhoreSchemaMapper;
 use Phore\MessageQueue\Security\HmacSecurity;
 
@@ -68,7 +67,7 @@ function send(MessageQueueInterface $mq): void
     $user->userId = 'u-789';
     $user->email = 'sdk-user@example.org';
 
-    $mq->emit($user); // Liest MessageType, validiert und serialisiert.
+    $mq->publish($user); // Liest MessageType, validiert und serialisiert.
 
     // Gleichwertige explizite API, etwa für eine andere Anwendung ohne SDK:
     $mq->publish('users', 'user.created.v1', [
@@ -84,7 +83,7 @@ function demo(string $dsn, string $sharedSecret): void
         // Attributvariante: Resolver liest Methodensignatur und DTO-Metadaten.
         $mq->registerHandlers(new UserHandlers());
         send($mq);
-        $mq->run(new RunOptions(maxMessages: 4, maxSeconds: 10));
+        $mq->run(maxMessages: 4, maxSeconds: 10);
     } finally {
         $mq->close();
     }
@@ -105,8 +104,8 @@ function demoCallback(string $dsn, string $sharedSecret): void
             printf("Callback: %s / %s\n", $context->messageId, $user->email);
         }); // users + sdk-users + user.created.v1; automatische Hydration.
         send($mq);
-        // Empfangsschleife für registrierte Handler, kein verzögertes emit/publish.
-        $mq->run(new RunOptions(maxMessages: 2, maxSeconds: 10));
+        // Empfangsschleife für registrierte Handler, kein verzögertes publish.
+        $mq->run(maxMessages: 2, maxSeconds: 10);
     } finally {
         $mq->close();
     }
@@ -150,8 +149,8 @@ function demoMultipleTopics(string $dsn, string $sharedSecret): void
         $entry->text = 'Ein Vorgang wurde abgeschlossen.';
         $mq->publish('audit.users', 'audit.entry.v1', $entry);
         $mq->publish('audit.billing', 'audit.entry.v1', $entry);
-        // emit($entry) wäre MAPPING_INCOMPLETE: kein festes Topic auf diesem DTO.
-        $mq->run(new RunOptions(maxMessages: 2, maxSeconds: 10));
+        // publish($entry) wäre MAPPING_INCOMPLETE: kein festes Topic auf diesem DTO.
+        $mq->run(maxMessages: 2, maxSeconds: 10);
     } finally {
         $mq->close();
     }

@@ -9,7 +9,6 @@ use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\Exception\MessageValidationException;
 use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\MessageRegistry;
-use Phore\MessageQueue\RunOptions;
 use Phore\MessageQueue\Schema\PhoreSchemaMapper;
 use Phore\MessageQueue\Security\HmacSecurity;
 use Phore\MessageQueue\SubscriptionOptions;
@@ -69,18 +68,18 @@ function demo(string $dsn, string $sharedSecret): void
         ]);
 
         // Zwei unabhängige Subscriptions verarbeiten je dieselbe Nachricht.
-        $mq->run(new RunOptions(maxMessages: 2, maxSeconds: 10));
+        $mq->run(maxMessages: 2, maxSeconds: 10);
 
-        // Typobjekt ohne Attribute: emit löst das programmatische Mapping auf.
+        // Typobjekt ohne Attribute: publish löst das programmatische Mapping auf.
         $user = new LocalUserCreated();
         $user->userId = 'u-456';
         $user->email = 'other@example.org';
-        $mq->emit($user);
-        $mq->run(new RunOptions(maxMessages: 2, maxSeconds: 10));
+        $mq->publish($user);
+        $mq->run(maxMessages: 2, maxSeconds: 10);
 
         // Ohne Contract registrierter Typ: JSON-Daten, keine Schema-Hydration.
         $mq->publish('telemetry', 'heartbeat.v1', ['service' => 'billing']);
-        $mq->run(new RunOptions(maxMessages: 1, maxSeconds: 10));
+        $mq->run(maxMessages: 1, maxSeconds: 10);
 
         // Aussagekräftiger lokaler Fehler, bevor die Nachricht versendet wird.
         try {

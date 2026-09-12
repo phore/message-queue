@@ -32,9 +32,10 @@ verfügbare Worker; gleichmäßiger Zufall oder Exactly-once-Ausführung werden
 nicht vorausgesetzt.
 
 Die Alltags-API bleibt klein: `publish()` sendet ein Event, `subscribe()`
-empfängt Events, `request()->await()` erwartet eine Antwort, `respond()`
+empfängt Events, `publish(...)->await()` wartet optional auf eine Antwort, `respond()`
 registriert einen Command-Handler und `run()` verarbeitet Nachrichten.
-`emit($dto)` ist die kurze Variante für bereits zugeordnete SDK-Typen.
+`publish($dto)` übernimmt Topic und Typ aus den Metadaten des Objekts;
+eine separate `emit`-Methode ist nicht mehr vorgesehen.
 Für Diagnose ergänzt `check()` einen standardisierten Bericht über Verbindung
 und Consumer-Bereitschaft. Dienste können über einen gemeinsamen `HealthState`
 Probleme aktiv melden und betroffene Verarbeitung pausieren; Frontend und
@@ -55,6 +56,15 @@ Offene Werte werden explizit ergänzt, widersprüchliche feste Angaben und
 doppelte lokale Bindungen schon beim Registrieren abgelehnt. Für mehrere
 Topics bleibt das Topic am Contract offen; feste Subscriptions bedeuten
 konkurrierende Worker. Siehe [Attributbeispiele](examples/api-draft/03-attributes.php).
+
+`publish` sendet sofort und liefert `SendResult` mit Broker-Beleg `receipt`.
+Mit konfiguriertem RPC-Rückkanal wartet optional
+`publish($command)->await(timeoutSeconds: 5)` auf ein Responder-Ergebnis;
+`await` sendet nicht erneut. Ohne Rückkanal ist späteres Warten nicht möglich.
+Häufige Optionen gehen direkt: `run(maxMessages: 100, maxSeconds: 30)`;
+`RunOptions`/`AwaitOptions` bleiben erlaubt, direkte Werte überschreiben ihre
+entsprechenden Felder. Das vollständige Beispiel steht in
+[05-rpc.php](examples/api-draft/05-rpc.php).
 
 ## Git Submodules
 

@@ -8,6 +8,7 @@
 | 2026-09-12 | dermatthes | §§ 1.1, 16: Standardisierte Systemchecks, deklarierte Nachrichtenabhängigkeiten, Listenerdiagnose und Frontend-/Monitoring-Anbindung ergänzt |
 | 2026-09-12 | dermatthes | §§ 1, 1.1, 3, 4: PhoreMQ als zentrales Objekt mit DSN-/Connector-Konstruktor und gleichwertiger Factory-Erzeugung ergänzt |
 | 2026-09-12 | dermatthes | §§ 5, 6, 6.2, 11: Callback-Kurzform, abgeleitete Metadaten, offene Topics und frühe Konfliktprüfung ergänzt |
+| 2026-09-12 | dermatthes | §§ 1.1, 2, 5, 6.2, 11, 13, 13.1, 13.2, 13.4, 14.1: Einheitliches publish für DTO/Explizitform, optionales await, direkte Laufzeitparameter und Deadline-Regeln ergänzt |
 
 ## § 1 Abstract und Lieferumfang
 
@@ -45,16 +46,19 @@ nicht stillschweigend auf schwächere Semantik zurückfallen.
 ### § 1.1 Kleine API auf einen Blick
 
 Die Empfehlung ist die konkrete Queue-Fassade `PhoreMQ`, die
-`MessageQueueInterface` implementiert, mit **fünf alltäglichen Operationen**.
-Event, Request und Antwort-Handler sind am Verb erkennbar; Broker, Routing,
+`MessageQueueInterface` implementiert, mit den Operationen `publish`, `subscribe`, `respond` und `run`.
+Senden, Warten und Empfang sind am jeweiligen Aufruf erkennbar; Broker, Routing,
 Schema und Middleware werden einmal am Objekt konfiguriert.
+`publish` sendet sofort und liefern ein `SendResult`; nur dessen
+optional aufgerufenes `await` wartet auf eine fachliche Antwort. [geändert]
 
 ```php
 $mq = new PhoreMQ($dsn, $options); // Einmal erzeugen; DSN oder Connector.
 $mq->publish('users', 'user.created.v1', ['userId' => 'u-1']);
 $mq->subscribe('users', 'billing-users', function (array $event): void { /* ... */ });
 
-$reply = $mq->request('calculator', 'math.divide.v1', ['a' => 12, 'b' => 3])->await();
+$reply = $mq->publish('calculator', 'math.divide.v1', ['a' => 12, 'b' => 3])
+    ->await(timeoutSeconds: 5); // Rückkanal einmal in ConnectionOptions konfigurieren.
 echo $reply->payload['quotient']; // 4; wartet ausdrücklich auf eine entfernte Antwort.
 
 $mq->respond('calculator', 'calculator-workers', function (array $params): array {
@@ -65,12 +69,14 @@ $mq->run();
 
 Diese Zeilen illustrieren getrennte Sender-/Empfängerprozesse, kein sequenziell
 ausführbares Skript; der Responder muss vor dem Request laufen. Konstruktor
-bzw. Factory und `close()` gehören zum Verbindungslebenszyklus. `emit($dto)` ist ausschließlich
-der Komfortaufruf für `publish` mit Mapping; Attribute registrieren dieselben
+bzw. Factory und `close()` gehören zum Verbindungslebenszyklus. `publish($dto)` ist
+die Objektform derselben Sendemethode mit automatischem Mapping; Attribute registrieren dieselben
 Handler. Es gibt keine zweite RPC-Client-Fassade, kein eigenes Promise-Framework,
 keinen Container-Zwang und kein mehrdeutiges `dispatch(..., true)`. Erweiterungen
 kommen über Optionsobjekte und zwei Middleware-Hooks; Signierung, Codec und
 Konnektoren sind Infrastruktur-Schnittstellen, keine Pflicht im täglichen Code.
+`request` bleibt eine optionale explizite RPC-Komfortform, ist für das Warten
+nach `publish` aber nicht mehr erforderlich. [geändert]
 
 Für Diagnose gibt es zusätzlich genau einen Queue-Aufruf `check()`.
 Dienstentwickler melden Zustandsänderungen über `HealthState::set()` in einem
@@ -102,10 +108,12 @@ Verhalten, kein zusätzlicher Broadcast-Schalter beim Senden. Beispiele in § 15
 
 Der Grundvertrag lautet **at least once innerhalb der konfigurierten
 Aufbewahrung und Verfügbarkeit**. Doppelte Zustellungen sind möglich, ebenso
-eine unklare Publish-Bestätigung bei Verbindungsabbruch. `PublishReceipt`
-bestätigt Backend-Annahme, keine Verarbeitung durch Empfänger. Es gibt keine
+eine unklare Publish-Bestätigung bei Verbindungsabbruch.
+`SendResult::receipt` enthält ein `PublishReceipt`: Es bestätigt Backend-Annahme,
+keine Verarbeitung durch Empfänger. `SendResult::await()` liefert dagegen die
+fachliche Antwort eines Responders, keine Bestätigung aller Subscriber. Es gibt keine
 backendübergreifende Exactly-once-Garantie und keine globale Reihenfolge.
-Fachliche Seiteneffekte müssen anhand `messageId` idempotent sein.
+Fachliche Seiteneffekte müssen anhand `messageId` idempotent sein. [geändert]
 
 `subscribe()` bindet eine benannte Subscription und prüft ihre Konfiguration.
 Neue Subscriptions beginnen standardmäßig bei `StartPosition::Latest` zum
@@ -284,23 +292,23 @@ programmatische Konstruktor-/Factory-Konfiguration vorzuziehen.
 Die vorgeschlagenen öffentlichen Signaturen lauten:
 
 ```php
-publish(string $topic, string $type, array|object $payload,
-    ?PublishOptions $options = null): PublishReceipt;
-emit(object $message, ?PublishOptions $options = null): PublishReceipt;
+publish(string|object $topic, string|PublishOptions|null $type = null,
+    array|object|null $payload = null, ?PublishOptions $options = null): SendResult;
 subscribe(string|callable $topic, ?string $subscription = null,
     ?callable $handler = null, ?SubscriptionOptions $options = null): SubscriptionHandle;
 request(string $topic, string $type, array|object $params,
-    ?RequestOptions $options = null): PendingReply;
+    ?RequestOptions $options = null): SendResult;
 respond(string $topic, string $subscription, callable $handler,
     ?SubscriptionOptions $options = null): SubscriptionHandle;
 registerHandlers(object $handler): void;
-run(?RunOptions $options = null): void;
+run(?RunOptions $options = null, ?int $maxMessages = null,
+    ?float $maxSeconds = null, ?float $idleTimeoutSeconds = null): void;
 stop(): void;
 close(): void;
 ```
 
-`publish` benennt Topic und Typ ausdrücklich; `emit` liest sie aus Registry
-oder Attribut der lokalen Sendeklasse. Ein fehlendes oder widersprüchliches
+`publish($topic, $type, $payload)` benennt Topic und Typ ausdrücklich;
+`publish($dto)` liest sie aus Registry oder Attribut der lokalen Sendeklasse. Ein fehlendes oder widersprüchliches
 Mapping wirft `MessageMappingException`. Registry, Attribute und explizite
 Angaben ergänzen nur offene Werte; widersprüchliche feste Angaben werden
 abgelehnt statt still überschrieben. Mehrfache programmatische Registrierung
@@ -309,6 +317,24 @@ desselben Sendetyps wird abgelehnt. `PublishOptions` kann eine stabile `messageI
 unklar bestätigten Publishes verwendet dieselbe ID und denselben fachlichen
 Inhalt. `request`/`respond` sind die optionale RPC-Erweiterung aus § 13;
 `subscribe` sendet niemals automatisch einen Rückgabewert. [geändert]
+
+`publish` entscheidet ausschließlich anhand des ersten Parameters: Ein String
+ist das explizite Topic und benötigt einen String-Typ sowie Array-/Objekt-Payload.
+Ein Objekt ist die gesamte Payload; Topic und Wire-Typ werden aus seinem lokalen
+Mapping ergänzt. Für diese Form sind `publish($dto, $options)` und
+`publish($dto, options: $options)` gleichwertig. Der Parametername `topic` bleibt
+für bestehende benannte Aufrufe erhalten. Ein Array als erster Parameter wird
+nicht als DTO interpretiert. Ohne Mapping kein Ableiten aus dem PHP-Klassennamen. [neu]
+
+`PublishOptions` kann `topic` und `type` für offene Mappingwerte enthalten,
+etwa `publish($dto, options: new PublishOptions(topic: 'audit.users'))`.
+Identische Angaben sind zulässig, widersprüchliche feste Angaben aus Klasse,
+Registry oder explizitem Aufruf werfen weiterhin `MessageMappingException`.
+Zusätzliche Payload/Typ-Argumente in der Objektform, ein Optionsobjekt an
+zweiter und vierter Position oder eine unvollständige explizite Form werden
+vor Publish als `InvalidArgumentException` abgelehnt. Diese Fälle werden nicht
+heuristisch umgedeutet. Die bisher vorgeschlagene Methode `emit` entfällt,
+auch als Alias, da die API noch nicht implementiert ist. [neu]
 
 `SubscriptionOptions` enthält optional `topic` und `subscription` für die
 Callback-Kurzform sowie `type` als exakten Filter,
@@ -320,7 +346,7 @@ Ohne Typfilter muss der Array-Handler alle
 Nachrichtentypen des Topics verarbeiten können. Nicht passende Typen werden
 für diese Subscription bewusst übersprungen und bestätigt; ein separater
 Handler darf nicht dieselbe Subscription mit anderem Filter übernehmen.
-Filteränderungen benötigen eine neue Subscription oder explizite Migration. [geändert]
+Filteränderungen benötigen eine neue Subscription oder explizite Migration.
 
 Die bisherigen Aufrufe `subscribe($topic, $subscription, $handler, $options)`
 bleiben gültig. Neu ist `subscribe($callback)` bzw.
@@ -332,15 +358,26 @@ existierender Funktionsname akzeptiert, niemals als automatisch entdeckter
 Topic-Handler. Eine Subscription in der zweiten Position ergänzt bei der
 Kurzform einen offenen Wert. Vermischte ungültige Aufrufe werden mit
 `InvalidHandlerException` abgelehnt. Ein wirklich leeres `subscribe()` besitzt
-keinen Callback und ist kein gültiger Aufruf. [neu]
+keinen Callback und ist kein gültiger Aufruf.
 
 `subscribe` registriert und bindet, `run` startet den blockierenden Empfang.
-Vorgesehen: `RunOptions(maxMessages, maxSeconds, idleTimeoutSeconds)`;
+Vorgesehen: `RunOptions(maxMessages, maxSeconds, idleTimeoutSeconds)` oder
+direkt `run(maxMessages: 100, maxSeconds: 30, idleTimeoutSeconds: 2)`;
 `run` kehrt beim ersten erreichten Limit zurück. `stop` beendet nach dem
 laufenden Handler, `close` gibt Verbindungen frei. Empfangs-Timeout ohne
 Nachricht ist kein Fehler. Ein Handler erhält Payload und optional
 `MessageContext`; letzterer liefert `messageId`, Typ, Topic, Versuch und
-Attachment-Zugriff. Broker-spezifische Objekte werden nicht weitergereicht.
+Attachment-Zugriff. Broker-spezifische Objekte werden nicht weitergereicht. [geändert]
+
+Optionsobjekte bleiben als erster Parameter erlaubt, etwa
+`run(new RunOptions(maxSeconds: 60), maxMessages: 100)`. Nicht-null direkt
+angegebene Parameter überschreiben denselben Wert aus dem Optionsobjekt;
+nicht angegebene Werte übernehmen dessen Konfiguration bzw. Library-Defaults.
+Das Optionsobjekt wird nicht mutiert. Limits müssen endlich und positiv sein,
+`maxMessages` ganzzahlig; ungültige Werte werfen `InvalidArgumentException`
+vor Eintritt in den Loop. Diese Regel gilt auch für die direkten Parameter
+von `await`; Routingkonflikte aus § 6.2 werden dagegen weiterhin abgelehnt.
+`run` bedient alle registrierten Handler, nie das vorherige Sendekommando. [neu]
 
 Standardmäßig folgt Ack erst nach erfolgreicher Callback-Rückkehr. Ein
 temporärer Handlerfehler löst eine begrenzte Retry-Policy aus; endgültige
@@ -369,7 +406,7 @@ Parameter. Alternativ reicht `#[Subscribe]` auf einer öffentlichen
 Handler-Methode; `registerHandlers($object)` verwendet denselben Resolver.
 Offene Werte werden am Handler oder Aufruf ergänzt. PHPDoc-Annotationen als
 zweites Metadatensystem sind vorerst nicht vorgesehen; die normalen
-PHPDoc-Feldtypen von `phore/schema` bleiben nutzbar. [geändert]
+PHPDoc-Feldtypen von `phore/schema` bleiben nutzbar.
 
 Ein SDK enthält ausschließlich Contracts/DTOs und optionale Attribute, keine
 Connection, Secrets oder Worker. Ein SDK darf auch ganz ohne MQ-Attribute
@@ -393,7 +430,7 @@ Typisierte Handler benötigen einen eindeutigen Message-Typ aus
 ist die Registrierung ungültig. Die optionale Schema-Bridge muss verfügbar
 sein, sobald DTO-Hydration oder Contract-Validierung verlangt wird;
 sonst `MissingDependencyException`, niemals stiller Rückfall auf Arrays.
-Der Resolver aus § 6.2 prüft alle vorhandenen Angaben auf Übereinstimmung. [geändert]
+Der Resolver aus § 6.2 prüft alle vorhandenen Angaben auf Übereinstimmung.
 
 Kompatibilität bedeutet: Pflichtfelder müssen vorhanden sein, die vorhandenen
 bekannten Felder müssen rekursiv ihren Datentypen entsprechen. Zusätzliche
@@ -452,7 +489,7 @@ Payload-Parameter des Callbacks; der optionale zweite `MessageContext` liefert
 keine Routingwerte. Closures, Funktionsnamen, öffentliche Methoden-Callables
 und aufrufbare Objekte werden einheitlich über ihre tatsächliche Signatur
 aufgelöst, ohne den Callback auszuführen. Mehrdeutige Payload-Typen bleiben
-wie in § 6 beschrieben ungültig. [neu]
+wie in § 6 beschrieben ungültig.
 
 Der Resolver sammelt Klassenmapping/`MessageType`, ein gegebenenfalls am
 Callback vorhandenes `Subscribe`-Attribut und explizite Aufruf-/Optionswerte.
@@ -462,21 +499,21 @@ sind ein Fehler. Es gibt keinen stillen Vorrang. Methodennamen, PHP-FQCNs,
 Hostname oder Instanz-ID werden niemals zu Topic- oder Subscriptionnamen
 umgedeutet. Für SDKs ohne Attribute kann
 `registry->register($type, $class, topic: ..., subscription: ...)` dieselben
-Metadaten lokal hinterlegen. [neu]
+Metadaten lokal hinterlegen.
 
 Topic und Subscription müssen nach Auflösung eindeutig vorhanden sein;
 für einen DTO-Handler zusätzlich der Wire-Typ. Untypisierte/Array-Handler
 benötigen explizite Topic-/Subscription-Angaben und optional den Typfilter.
 Ohne Typfilter bleibt ihr bisheriger Empfang aller Typen des Topics gültig.
 `payloadClass` muss weiterhin zum Callback passen. Ohne Schema-Bridge gibt
-es auch in der Kurzform keine automatische DTO-Hydration. [neu]
+es auch in der Kurzform keine automatische DTO-Hydration.
 
 Ein für mehrere Topics verwendeter Contract lässt `MessageType::topic`
 vollständig weg. Das Topic wird für jede Registrierung explizit gewählt;
 es gibt keine automatische Expansion, kein Wildcard-Abonnement und keine
 Liste im `topic`-Feld. Für unabhängige Gruppen bleibt entsprechend
 `MessageType::subscription` offen. Der fachliche Typ wird weiterhin aus der
-Klasse übernommen: [neu]
+Klasse übernommen:
 
 ```php
 #[MessageType('audit.entry.v1')]
@@ -497,15 +534,16 @@ wird daher nur gewählt, wenn diese Gruppierung absichtlich für alle Nutzer
 gelten soll. Mehrere Dienste, die dieselben vollständigen Metadaten übernehmen,
 konkurrieren um Arbeit; für Fan-out braucht jeder seine eigene, am Contract
 offen gelassene Subscription. Ein gleicher Gruppenname an unterschiedlichen
-logischen Topics bezeichnet unterschiedliche Bindungen. [neu]
+logischen Topics bezeichnet unterschiedliche Bindungen.
 
-`emit($dto)` verwendet dieselben festen Topic-/Typ-Angaben; die Subscription
-spielt beim Senden keine Rolle. Ohne festes Topic sendet die Anwendung mit
-`publish($topic, $type, $dto)` bzw. einem Array. Bei einem gemappten DTO müssen
+`publish($dto)` verwendet dieselben festen Topic-/Typ-Angaben; die Subscription
+spielt beim Senden keine Rolle. Ohne festes Topic ergänzt die Anwendung es mit
+`publish($dto, options: new PublishOptions(topic: ...))` oder verwendet
+`publish($topic, $type, $dto)` bzw. ein Array. Bei einem gemappten DTO müssen
 explizite Topic-/Typ-Werte zu dessen festen Metadaten passen; ein offenes
-Topic lässt sich frei ergänzen. `emit` ohne auflösbares Topic wirft
+Topic lässt sich frei ergänzen. `publish` ohne auflösbares Topic wirft
 `MessageMappingException`. Mehrere Topics werden durch mehrere ausdrückliche
-Publishes angesprochen, nicht durch einen verborgenen Broadcast. [neu]
+Publishes angesprochen, nicht durch einen verborgenen Broadcast. [geändert]
 
 Die Registrierung prüft alle Metadaten vor dem Anlegen/Binden von Ressourcen.
 Widersprüche werfen `MessageMappingException` mit `code=MAPPING_CONFLICT`,
@@ -514,7 +552,7 @@ Pflichtwerte `MAPPING_INCOMPLETE` mit `missingFields`. Ein zweiter lokaler
 Handler für dieselbe Topic-/Subscription-Bindung wirft
 `InvalidHandlerException` mit `code=DUPLICATE_SUBSCRIPTION`, auch wenn beide
 Callbacks gleich aussehen oder verschiedene Typfilter wünschen. Andere
-Prozesse derselben Gruppe sind ausdrücklich erlaubt. [neu]
+Prozesse derselben Gruppe sind ausdrücklich erlaubt.
 
 `registerHandlers` prüft sämtliche ausgewählten Methoden zunächst gemeinsam
 auf lokale Konflikte und bindet danach. Kein globales Dateisystem-Scanning;
@@ -523,14 +561,14 @@ eine bereits einzeln registrierte Methode darf nicht durch anschließendes
 am Broker teilweise fehl, werden die in diesem Aufruf neu geöffneten lokalen
 Bindings geschlossen; zuvor bestehende Registrierungen bleiben erhalten.
 Dabei bereits angelegte dauerhafte Brokerressourcen werden nicht automatisch
-gelöscht. Die Meldung benennt die betroffenen Bindings. [neu]
+gelöscht. Die Meldung benennt die betroffenen Bindings.
 
 Vorgesehene Contract-Tests: identisches Routing aller drei Registrierungswege,
 DTO-Hydration, offene Topics, feste Topic-/Typ-/Subscription-Konflikte, fehlende
 Metadaten, doppelte lokale Gruppen, gemeinsame Gruppe in zwei Prozessen,
 keine Ressourcenerzeugung bei Metadatenfehlern und Cleanup bei Bindefehlern.
 Beispiel 03 zeigt die erfolgreichen Varianten und erwartete Exceptions;
-es bleibt ausschließlich API-Entwurf. [neu]
+es bleibt ausschließlich API-Entwurf.
 
 ## § 7 Redis-Standard und Konnektorvergleich
 
@@ -700,7 +738,9 @@ Payload, Secret, signierter Download-Link oder Receipt im normalen Fehlertext.
 | `UnsupportedCapabilityException` | Dauerhafter Fan-out mit reinem SQS oder Replay ohne Unterstützung |
 | `ConnectionException` / `AuthenticationException` | Netzwerkproblem retrybar; falsche Credentials nicht endlos wiederholen |
 | `PublishException` | Annahme fehlgeschlagen oder unbekannt; `outcome` = rejected/unknown |
-| `MessageMappingException` / `InvalidHandlerException` | `MAPPING_INCOMPLETE`, `MAPPING_CONFLICT`, `DUPLICATE_SUBSCRIPTION` oder mehrdeutige Reflection; Details in § 6.2 [geändert] |
+| `ReplyNotEnabledException` | await auf ohne Rückkanal gesendeter Nachricht; kein nachträgliches Senden [neu] |
+| `PendingCapacityExceededException` | Lokale Kapazität für weitere antwortfähige Sends erschöpft; vor Publish ablehnen [neu] |
+| `MessageMappingException` / `InvalidHandlerException` | `MAPPING_INCOMPLETE`, `MAPPING_CONFLICT`, `DUPLICATE_SUBSCRIPTION` oder mehrdeutige Reflection; Details in § 6.2 |
 | `SerializationException` / `InvalidEnvelopeException` | Nicht unterstützte Payload oder defekter Frame; endgültig |
 | `MessageValidationException` | `user.created.v1: $.email: required property is missing` |
 | `MessageHydrationException` | Konstruktor-/Property-Zuweisung gescheitert; Schema-Exception als previous |
@@ -770,9 +810,10 @@ Primärquellen, abgerufen am 2026-09-12:
 [Beispiel 05](../../examples/api-draft/05-rpc.php) enthält Verbindung,
 programmatischen Responder, alternativ denselben Handler per `#[Respond]`,
 Parameterübergabe, Ergebnis, Warning und Fehlerbehandlung in getrennten
-Prozessen. `request` veröffentlicht sofort und gibt `PendingReply` zurück;
-erst `await()` blockiert. Der Responder liefert mit `return` ein Array oder
-DTO. Ein skalarer Wert wird explizit als `['value' => ...]` verpackt.
+Prozessen. `publish` und die optionale RPC-Komfortform `request`
+veröffentlichen sofort und geben dasselbe `SendResult` zurück; erst dessen
+`await()` blockiert auf die fachliche Antwort. Der Responder liefert mit `return` ein Array oder
+DTO. Ein skalarer Wert wird explizit als `['value' => ...]` verpackt. [geändert]
 
 ### § 13.1 Einmalige Konfiguration und Aufruf
 
@@ -783,16 +824,24 @@ Im lokalen Beispiel dürfen beide auf derselben HMAC-Audience arbeiten.
 Anwendungen verwenden eigene Reply-Topics je Instanz, oder einen expliziten
 zentralen Demultiplexer; konkurrierende Client-Prozesse dürfen nicht denselben
 Reply-Consumer teilen und fremde Antworten wegkonsumieren. Die Rückkanal-
-Subscription wird vor Veröffentlichung des ersten Requests bestätigt.
+Subscription wird vor Veröffentlichung jeder antwortfähigen Nachricht
+bereitgestellt; auch das lokale Korrelationsregister existiert vor Publish,
+damit sehr schnelle Antworten nicht verloren gehen. [geändert]
 
 `RequestOptions` ergänzt `timeoutSeconds` (Default 30 Sekunden ab `request`,
 nicht ab `await`), `metadata`, optional `responseClass` und `onNotice`.
-`PendingReply::await(): Reply` verarbeitet nur den internen Rückkanal dieser
+`SendResult::await(?AwaitOptions $options = null, ?float $timeoutSeconds = null,
+?string $responseClass = null, ?callable $onNotice = null): Reply` verarbeitet
+nur den internen Rückkanal dieser
 Connection, keine beliebigen Business-Handler. Mehrere Pending-Requests
 teilen einen Dispatcher, der nach Request-ID puffert; Anzahl und Speicher
 sind begrenzt. Gleichzeitige/nestende `run`-/`await`-Loops auf derselben
 Connection sind ungültig. Für RPC aus einem Handler eine separate Connection
 und einen unabhängig laufenden Responder verwenden.
+`RequestOptions::responseClass`/`onNotice` liefern lediglich die Anfangswerte
+für dieselben Await-Einstellungen. `PendingReply` entfällt als separater
+Rückgabetyp im Entwurf; bestehende `request(...)->await()`-Beispiele bleiben
+gültig. [geändert]
 
 `Reply` besitzt schreibgeschützte `payload`, `metadata` und `notices`.
 `responseClass` hydriert `payload` strukturell nach § 6, ohne die PHP-Klasse
@@ -824,10 +873,11 @@ Policy bestätigt. Notices beenden den Request nicht. Der Client prüft
 Signatur, Audience, Reply-Topic, Request-ID, erwarteten Antworttyp und Schema;
 eine Korrelations-ID allein ist keine Authentifizierung.
 
-`request()->await()` wartet absichtlich nur auf eine terminale Antwort.
+`publish(...)->await()` und `request(...)->await()`
+warten absichtlich nur auf eine terminale Antwort.
 Wer Antworten aller Teilnehmer braucht, verwendet `publish` plus eine
 aggregierende Subscription wie in § 15.2; hierfür wird keine mehrdeutige
-`request(all: true)`-Option oder zusätzliche Queue-Methode eingeführt.
+`request(all: true)`-Option oder zusätzliche Queue-Methode eingeführt. [geändert]
 
 Auf dem Server folgen Antwort-Publish und dessen Bestätigung **vor** dem Ack
 des Requests. Bei unklarer Antwortannahme bleibt der Request wiederholbar.
@@ -875,6 +925,99 @@ abgelegt. Ein fehlerhafter `onNotice`-Callback darf den bereits laufenden
 Command nicht erneut senden; er wird lokal gemeldet, der Dispatcher setzt
 Empfang und Deadline-Verarbeitung fort.
 
+### § 13.4 Sofort senden, anschließend optional warten
+
+```php
+$sent = $mq->publish($command); // Sendet sofort, wartet nur auf Broker-Annahme.
+// Andere lokale Arbeit ...
+$reply = $sent->await(timeoutSeconds: 5);
+
+// Gleichwertig in einer Zeile, ohne zweites Sendekommando:
+$reply = $mq->publish($command)->await(timeoutSeconds: 5);
+$reply = $mq->publish('calculator', 'math.divide.v1', ['a' => 12, 'b' => 3])
+    ->await(new AwaitOptions(timeoutSeconds: 5));
+```
+
+`Phore\MessageQueue\SendResult` hat eine readonly `receipt: PublishReceipt` und `await` mit der
+Signatur aus § 13.1. Es ist ein bereits gesendeter Vorgang, kein verzögerter
+Builder: weder `await` noch Destruktor oder `run` veröffentlichen ihn erneut.
+`$mq->publish($event);` ohne weitere Verwendung sendet ebenso unmittelbar.
+Fehlgeschlagene oder unklar bestätigte Broker-Annahme wirft bereits beim
+Sendebefehl `PublishException`. Send-Middleware behält ihren internen
+`PublishReceipt`-Vertrag; die Fassade ergänzt darüber das öffentliche
+`SendResult`, ohne Middleware ein zweites Mal auszuführen. [neu]
+
+Weil `await` erst nach dem Senden aufgerufen wird, müssen Antwortfähigkeit,
+Reply-Ziel, Korrelation und Wire-Deadline bereits beim Publish feststehen.
+`PublishOptions::reply` ist nullable: null (Default) aktiviert den Rückkanal
+für fachliche Nachrichten automatisch, wenn die Connection einen vollständig
+konfigurierten RPC-Client besitzt; false sendet ausdrücklich ohne Rückkanal;
+true verlangt ihn und wirft bei fehlender Konfiguration **vor dem Senden**
+`RpcNotConfiguredException`. Ohne RPC-Client sendet der Default normale
+Events. Ein späteres `await` auf einem nicht antwortfähigen `SendResult`
+wirft `ReplyNotEnabledException` und kann das gesendete Event nicht nachträglich
+in einen Request verwandeln. Fehler im konfigurierten Rückkanal führen vor
+Publish zum Fehler, nicht zu stillem Rückfall ohne Antwortfähigkeit. [neu]
+
+Antwortfähige `publish`-Nachrichten tragen wie Requests signierte
+`requestId`, `replyTo` und Deadline; ihr `kind=event` bleibt erhalten.
+`respond` akzeptiert zusätzlich zu `kind=request` solche antwortfähigen
+Events für seinen registrierten Typ und antwortet nach demselben Protokoll.
+`subscribe` führt seinen Handler wie bisher aus und sendet auch bei gesetztem
+Reply-Ziel **keinen** automatischen fachlichen Rückgabewert. Antwortfähigkeit
+ändert weder Fan-out noch Worker-Gruppen. Interne Replies, Notices und
+Health-Protokollnachrichten werden zwingend ohne neue Antwortanforderung
+transportiert, damit keine Antwortschleifen entstehen. [neu]
+
+`PublishOptions::replyTimeoutSeconds` bestimmt die vor dem Senden signierte
+Antwortfrist (Default 30 Sekunden ab Sendebeginn). `expiresAt` kann die Frist
+zusätzlich verkürzen. `Phore\MessageQueue\Rpc\AwaitOptions(timeoutSeconds, responseClass, onNotice)`
+steuert dagegen ausschließlich das lokale Warten und die lokale
+Ergebnisdarstellung. Direkte nicht-null Await-Parameter überschreiben das
+Optionsobjekt wie bei `run`. Das effektive Warten endet am früheren Zeitpunkt
+aus lokaler Wartefrist ab `await` und ursprünglicher Antwortdeadline; ohne
+lokalen Timeout gilt die verbleibende Antwortfrist. Längere Remote-Fristen
+müssen vor Publish gesetzt sein und lassen sich mit `await` nicht verlängern.
+Ungültige Await-Optionen werfen `InvalidArgumentException`; die Nachricht
+ist zu diesem Zeitpunkt ausdrücklich bereits gesendet. [neu]
+
+Ein lokaler Timeout wirft `RequestTimeoutException`, bricht aber den entfernten
+Handler nicht ab. Solange die ursprüngliche Antwortfrist läuft, darf derselbe
+Handle erneut warten, ohne erneutes Senden; eine bereits verifizierte terminale
+Antwort wird bis zur Handle-Freigabe zwischengespeichert. Ein nach Ablauf erst
+eintreffendes Result wird nicht mehr als rechtzeitige Antwort akzeptiert.
+Bereits rechtzeitig empfangene finale Ergebnisse bleiben abrufbar. Die erste
+Await-Ausführung fixiert `responseClass` und Notice-Callback für diesen Handle;
+widersprüchliche spätere Änderungen sind ungültig, ein neuer lokaler Timeout
+ist erlaubt. Notices werden pro Handle dedupliziert; vor `await` empfangene
+Notices bleiben nur im begrenzten Puffer, dessen Overflow explizit gemeldet
+wird, und sind nach Möglichkeit zusätzlich im finalen Reply enthalten. [neu]
+
+Der Client puffert nur begrenzt viele offene Vorgänge/Antwortbytes. Eine
+erschöpfte Kapazität wird vor einem weiteren antwortfähigen Publish als
+`PendingCapacityExceededException` gemeldet. Freigegebene Handles geben ihre
+lokalen Slots frei; später eintreffende Replies werden sicher verworfen bzw.
+nach der konfigurierten Ablagepolicy behandelt. Deadline und `close` räumen
+verbliebene offene Vorgänge auf. Auch ohne `await` müssen Rückkanal-Retention
+und Ressourcenlimits wirken; keine unbegrenzte Hintergrundwarteschlange und
+kein impliziter Hintergrundthread. Bewusst reine Events können mit
+`PublishOptions(reply: false)` den Antwortaufwand vermeiden. [neu]
+
+Bei fehlendem Responder oder einem reinen `subscribe`-Empfänger endet `await`
+mit Timeout; Schweigen beweist nicht, dass niemand existiert. Ein gezielter
+Health-Check kann vorab Bereitschaft prüfen, aber die Antwort nicht garantieren.
+Ein Broker-Ack ist kein RPC-Ergebnis. Wer Antworten aller Subscriber benötigt,
+verwendet weiter die explizite Aggregation aus § 15.2. `request` bleibt die
+Komfortform, die Antwortfähigkeit zwingend verlangt, `kind=request` setzt und
+`RequestOptions::timeoutSeconds` als ursprüngliche Remote-Frist übernimmt;
+eine zweite Promise-/Worker-API entsteht dadurch nicht. [neu]
+
+Vorgesehene Contract-Tests: genau ein Publish mit/ohne/nach mehrfachem await,
+Antwort vor await, lokaler Timeout und späteres Result, unverlängerbare
+Wire-Deadline, fehlender Rückkanal/Responder, Notice-Puffergrenze, ignorierte
+Handles, Kapazitätsgrenze, interne Antworten ohne Rekursion und direkte
+Parameter versus Optionsobjekt. Beispiel 05 zeigt beide Sendeformen. [neu]
+
 ## § 14 Metadaten, Middleware und API-Entscheidung
 
 [Beispiel 06](../../examples/api-draft/06-metadata-middleware.php) zeigt
@@ -886,21 +1029,22 @@ Das ist sowohl mit normalen Events als auch mit RPC nutzbar.
 
 | Framework / Library | Recherchierter Ansatz | Entscheidung für diese API |
 |---|---|---|
-| Symfony Messenger | `dispatch`, Handler, Envelope/Stamps, Middleware; `HandledStamp` liefert Ergebnisse ausgeführter Handler, kein automatischer Remote-Rückkanal | Metadaten und Hooks übernehmen; Remote-Warten ausdrücklich `request()->await()` nennen |
-| PHP Enqueue | `sendCommand` mit Reply-Option, Promise/`receive`, `Result::reply` und `ReplyExtension` | Request/Reply übernehmen; keine boolesche Option, die die Bedeutung eines normalen Sends verändert |
+| Symfony Messenger | `dispatch`, Handler, Envelope/Stamps, Middleware; `HandledStamp` liefert Ergebnisse ausgeführter Handler, kein automatischer Remote-Rückkanal | Metadaten und Hooks übernehmen; Remote-Warten ausdrücklich durch angehängtes `await()` ausdrücken [geändert] |
+| PHP Enqueue | `sendCommand` mit Reply-Option, Promise/`receive`, `Result::reply` und `ReplyExtension` | Rückkanal vor dem Sendebefehl vorbereiten; das anschließende await löst keine zweite Sendung aus [geändert] |
 | RabbitMQ PHP-Tutorial | Callback-Queue, `reply_to`, `correlation_id`, Duplikatbehandlung | Rückkanal und IDs intern verwalten, nicht in jedem Handler manuell publizieren |
 | NATS .NET Client | Explizites `RequestAsync`, Reply-Subject und Responder-Antwort | Verständliche Verben übernehmen; NATS-spezifische Inbox-Haltbarkeit nicht auf alle Broker übertragen |
 | MassTransit | Typisierte Requests/Responses, Response-Address, Fault-Nachrichten und Timeouts | Sichere terminale Fehlerantwort und lokale Exception; zusätzliche Client-/Bus-Fabriken im Alltagsaufruf vermeiden |
 | Laravel Queues | Job-Middleware um Handler-Ausführung mit Fortsetzungs-Callback | Kleinen Callable-Hook übernehmen, ohne Laravel-Job-Basisklasse und Container |
 
-**Empfehlung für dieses Paket:** explizite Verben auf einer Queue-Instanz,
-kleine Callbacks und optionale DTOs. Der alltägliche RPC-Aufruf benötigt nur
-`request(...)->await()`, der Dienst nur `respond(...); run()`; das einmalige
-Setup verwaltet Rückkanal und Policies. Zwei klare Methoden sind hier
-verständlicher als ein `send` mit Mode-Flags oder ein generisches
-Middleware-/Stamp-System für jeden einzelnen Aufruf. Das ist eine
-Designabwägung für die beschriebenen Anforderungen, kein objektiver
-Leistungsvergleich der Frameworks.
+**Empfehlung für dieses Paket:** eine Sendemethode `publish` für DTOs oder
+explizite Topic-/Typ-/Payload-Angaben, kleine Callbacks und optionales
+`await` auf dem Sendeergebnis. Der alltägliche RPC-Aufruf lautet
+`publish($command)->await(timeoutSeconds: 5)`, der Dienst verwendet
+`respond(...); run()`. Das einmalige Setup verwaltet Rückkanal und Policies;
+`request` bleibt eine ausdrückliche RPC-Komfortform. Direkte Laufzeitparameter
+und Optionsobjekte sind gleichwertige Zugänge zur selben Konfiguration.
+Dies ist die aktualisierte Designentscheidung für die Nutzeranforderungen,
+kein behaupteter objektiver Leistungsvergleich der Frameworks. [geändert]
 
 ### § 14.2 Metadaten außerhalb des fachlichen Payloads
 
