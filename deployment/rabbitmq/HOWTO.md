@@ -31,7 +31,7 @@ Identifikation einzelner Dienste. Diese Variante ist für das isolierte Testnetz
 docker compose -p phore-anonymous -f deployment/rabbitmq/compose.internal.yaml -f deployment/rabbitmq/compose.anonymous.yaml up -d --wait
 ```
 
-Die zweite Datei ersetzt nur den Konfigurationsmount. Sie aktiviert ANONYMOUS und
+Die zweite Datei ersetzt den Wert von RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS. Sie aktiviert ANONYMOUS und
 ordnet die Clients dem automatisch angelegten mq-demo-Benutzer zu. Der separate
 Projektname gibt dieser Demo ein eigenes Netzwerk und Volume. Broker-Ziel für den
 Client: Host rabbitmq, Port 5672, vHost app, Mechanismus ANONYMOUS; **keine**
@@ -45,11 +45,45 @@ und am [Konfigurationsschema](https://github.com/rabbitmq/rabbitmq-server/blob/v
 abgeglichen. Kein guest-Remote-Login und kein leeres Passwort werden als Ersatz
 für echte anonyme Anmeldung verwendet.
 
+## Einstellungen direkt als Compose-Parameter
+
+Das offizielle Image genügt. RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS reicht
+Erlang-Anwendungsparameter an RabbitMQ weiter; eigene Variablen wie
+RABBITMQ_ANONYMOUS_USER werden dafür nicht erfunden.
+[Offizielles Image](https://hub.docker.com/_/rabbitmq),
+[RabbitMQ Runtime-Parameter](https://www.rabbitmq.com/docs/runtime).
+
+```yaml
+environment:
+  RABBITMQ_DEFAULT_USER: mq-demo
+  RABBITMQ_DEFAULT_PASS: mq-demo-password
+  RABBITMQ_DEFAULT_VHOST: app
+  RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: >-
+    -rabbit auth_mechanisms ['ANONYMOUS']
+    -rabbit anonymous_login_user <<"mq-demo">>
+    -rabbit anonymous_login_pass <<"mq-demo-password">>
+```
+
+Dies ist der komplette Environment-Block für die anonyme Variante. Du kannst ihn
+auch direkt in compose.internal.yaml einsetzen; dann brauchst du keine zweite
+Compose-Datei. Netzwerk, Healthcheck und Datenvolume bleiben wie dort angegeben.
+Der Standard-AMQP-Port ist bereits 5672, dafür ist kein zusätzlicher Parameter nötig.
+
+Die Syntax ist hier Erlang: ['ANONYMOUS'] ist eine Atom-Liste, <<"...">> ein Binary.
+Anführungszeichen genau wie gezeigt übernehmen; keine zusätzliche Shell und keine
+Backslash-Escapes ergänzen. `>-` verbindet YAML-Zeilen zu einem Parameterwert.
+Die festen Demo-Werte enthalten keine Leerzeichen; beliebige dynamische Secrets
+nicht ungeprüft in diese Argumentzeichenfolge interpolieren.
+Nach Änderungen an environment den jeweiligen Startbefehl mit `up -d --wait`
+erneut verwenden: ein bloßes `restart` übernimmt keine geänderte Container-Umgebung.
+Die Einschränkungen zur Erstinitialisierung des Volumes gelten weiterhin.
+
 ## In eine bestehende Compose-Anwendung übernehmen
 
 Übernimm den rabbitmq-Service, das mq-Netzwerk und das data-Volume aus
-compose.internal.yaml in deine bestehende Datei; kopiere internal.conf daneben
-und passe den Mountpfad an. Ergänze bei den bestehenden Diensten:
+compose.internal.yaml in deine bestehende Datei. Alle Einstellungen stehen direkt
+in Compose; zusätzliche .conf-Dateien oder Config-Mounts sind nicht erforderlich.
+Ergänze bei den bestehenden Diensten:
 
 ```yaml
 services:

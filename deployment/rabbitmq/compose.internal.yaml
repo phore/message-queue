@@ -10,9 +10,12 @@ services:
       RABBITMQ_DEFAULT_USER: mq-demo
       RABBITMQ_DEFAULT_PASS: mq-demo-password
       RABBITMQ_DEFAULT_VHOST: app
+      # Erlang-Anwendungsparameter direkt im offiziellen Image; keine .conf-Datei.
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: >-
+        -rabbit auth_mechanisms ['PLAIN']
+        -rabbit anonymous_login_user none
     volumes:
       - data:/var/lib/rabbitmq
-      - ./internal.conf:/etc/rabbitmq/conf.d/90-app.conf:ro
     networks:
       - mq
     # Keine ports: Host/LAN erhalten keinen veröffentlichten Broker-Port.
