@@ -24,6 +24,7 @@ PHP-Dateien zeigen die vorgeschlagene API und sind noch nicht ausführbar.
 - [Metadaten und Diagnose-Middleware](examples/api-draft/06-metadata-middleware.php)
 - [Broadcast und Antworten aller Lock-Teilnehmer](examples/api-draft/07-broadcast-locking.php)
 - [Processing-Queue: ein verfügbarer Worker und ein Ergebnis](examples/api-draft/08-processing-workers.php)
+- [Systemcheck, Dienststatus und frühzeitige Fehlermeldungen](examples/api-draft/09-system-check.php)
 
 **An alle:** pro Empfänger eine eigene Subscription. **An einen:** alle Worker
 verwenden dieselbe Subscription. Das Backend verteilt die Zustellungen an
@@ -34,6 +35,10 @@ Die Alltags-API bleibt klein: `publish()` sendet ein Event, `subscribe()`
 empfängt Events, `request()->await()` erwartet eine Antwort, `respond()`
 registriert einen Command-Handler und `run()` verarbeitet Nachrichten.
 `emit($dto)` ist die kurze Variante für bereits zugeordnete SDK-Typen.
+Für Diagnose ergänzt `check()` einen standardisierten Bericht über Verbindung
+und Consumer-Bereitschaft. Dienste können über einen gemeinsamen `HealthState`
+Probleme aktiv melden und betroffene Verarbeitung pausieren; Frontend und
+Monitoring nutzen dasselbe Statusformat.
 Der [Frameworkvergleich und die API-Entscheidung in § 14.1](docs/proposals/2026-09-12-message-queue-api.md)
 begründen diesen Ansatz.
 
@@ -51,3 +56,8 @@ Nachträglich initialisieren oder aktualisieren:
 git submodule update --init --recursive
 git submodule update --remote --merge
 ```
+
+Deklarierte Nachrichtenabhängigkeiten lassen sich gemeinsam mit
+`check(options: new CheckOptions(requireDeclared: true))` prüfen. Der Bericht
+zeigt Listener, Bereitschaft, Ursachen und optional Host-/Speicherdiagnose;
+fehlende Antworten gelten als unbekannt statt als sicher fehlender Listener.

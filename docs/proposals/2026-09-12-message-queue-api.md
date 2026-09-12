@@ -5,6 +5,7 @@
 | 2026-09-12 | dermatthes | §§ 1–12: Proposal mit API-Beispielen, Konnektorvergleich und Paketgrenzen angelegt |
 | 2026-09-12 | dermatthes | §§ 1, 3, 5, 8, 11–14: Kleine explizite API, RPC, Begleitmeldungen, Metadaten und Middleware nach Frameworkvergleich ergänzt |
 | 2026-09-12 | dermatthes | §§ 2, 12, 13.2, 15: Broadcast mit allen Lock-Antworten und Processing-Queue mit konkurrierenden Workern ergänzt |
+| 2026-09-12 | dermatthes | §§ 1.1, 16: Standardisierte Systemchecks, deklarierte Nachrichtenabhängigkeiten, Listenerdiagnose und Frontend-/Monitoring-Anbindung ergänzt |
 
 ## § 1 Abstract und Lieferumfang
 
@@ -66,6 +67,12 @@ keinen Container-Zwang und kein mehrdeutiges `dispatch(..., true)`. Erweiterunge
 kommen über Optionsobjekte und zwei Middleware-Hooks; Signierung, Codec und
 Konnektoren sind Infrastruktur-Schnittstellen, keine Pflicht im täglichen Code.
 
+Für Diagnose gibt es zusätzlich genau einen Queue-Aufruf `check()`.
+Dienstentwickler melden Zustandsänderungen über `HealthState::set()` in einem
+gemeinsamen lokalen Zustandsobjekt; Transport, aktive Meldung und Ping-Antwort
+verwaltet die Library. Details und standardisierter Vertrag in § 16. [neu]
+
+
 ## § 2 Begriffe und Zustellvertrag
 
 | Begriff | Bedeutung und Beispiel |
@@ -86,7 +93,7 @@ ist ein Konfigurationsfehler. Weitere unabhängige Handler verwenden eigene
 Subscriptions. Ein Worker kann mehrere Topics abonnieren. „An alle“ bezeichnet
 alle passenden benannten Subscriptions; „an einen“ einen ausgewählten Worker
 innerhalb derselben Subscription. Die Subscription-Topologie bestimmt das
-Verhalten, kein zusätzlicher Broadcast-Schalter beim Senden. Beispiele in § 15. [geändert]
+Verhalten, kein zusätzlicher Broadcast-Schalter beim Senden. Beispiele in § 15.
 
 Der Grundvertrag lautet **at least once innerhalb der konfigurierten
 Aufbewahrung und Verfügbarkeit**. Doppelte Zustellungen sind möglich, ebenso
@@ -537,7 +544,7 @@ RPC-Umfang bleibt eine optionale Request/Reply-Erweiterung gemäß § 13.
 Globale Lock-/Konsensverfahren gehören nicht in die MQ-Library. § 15 zeigt
 Broadcast und das Einsammeln von Lock-Bestätigungen; die tatsächlichen
 lokalen Leases und gegebenenfalls ein autoritatives Fencing-Verfahren
-verantwortet ein separater Lock-Dienst der Anwendung. [neu]
+verantwortet ein separater Lock-Dienst der Anwendung.
 
 Für die spätere Umsetzung sind fokussierte Contract-Tests vorgesehen:
 unabhängige Subscriptions versus Worker-Gruppe, Redelivery nach Crash,
@@ -619,7 +626,7 @@ eine Korrelations-ID allein ist keine Authentifizierung.
 `request()->await()` wartet absichtlich nur auf eine terminale Antwort.
 Wer Antworten aller Teilnehmer braucht, verwendet `publish` plus eine
 aggregierende Subscription wie in § 15.2; hierfür wird keine mehrdeutige
-`request(all: true)`-Option oder zusätzliche Queue-Methode eingeführt. [neu]
+`request(all: true)`-Option oder zusätzliche Queue-Methode eingeführt.
 
 Auf dem Server folgen Antwort-Publish und dessen Bestätigung **vor** dem Ack
 des Requests. Bei unklarer Antwortannahme bleibt der Request wiederholbar.
@@ -773,9 +780,9 @@ Quellen für §§ 13–14, abgerufen am 2026-09-12:
 
 | Ziel | Subscription-Namen | Ergebnis |
 |---|---|---|
-| Alle beteiligten Dienste informieren | `locks-service-a`, `locks-service-b`, `locks-service-c` | Jeder Dienst erhält eine Kopie und kann separat antworten [neu] |
-| Alle konkreten Instanzen informieren | Je Instanz ein stabiler eigener Name, etwa `locks-instance-17` | Jede erwartete Instanz erhält ihre eigene Kopie [neu] |
-| Einen Job verteilen | Alle Worker: `text-processors` | Ein verfügbarer Consumer erhält die konkrete Zustellung zur Bearbeitung [neu] |
+| Alle beteiligten Dienste informieren | `locks-service-a`, `locks-service-b`, `locks-service-c` | Jeder Dienst erhält eine Kopie und kann separat antworten |
+| Alle konkreten Instanzen informieren | Je Instanz ein stabiler eigener Name, etwa `locks-instance-17` | Jede erwartete Instanz erhält ihre eigene Kopie |
+| Einen Job verteilen | Alle Worker: `text-processors` | Ein verfügbarer Consumer erhält die konkrete Zustellung zur Bearbeitung |
 
 Ein Topic kann beides gleichzeitig haben, etwa eine Worker-Subscription und
 eine unabhängige Audit-Subscription. „An einen“ bedeutet deshalb nicht
@@ -783,7 +790,7 @@ weltweit exklusiv, falls daneben weitere Subscriptions existieren. Für die
 Processing-Queue provisioniert man bewusst nur die ausführende Worker-Gruppe;
 Audit-Consumer führen den Job nicht aus. Die ersten beiden Muster brauchen
 die Fan-out-Capability: Redis-Gruppen, RabbitMQ-Queues oder SNS+SQS passen,
-ein einzelnes SQS-Queue-Backend kann nicht allen Gruppen Kopien liefern. [neu]
+ein einzelnes SQS-Queue-Backend kann nicht allen Gruppen Kopien liefern.
 
 ### § 15.2 Lock-Koordination: alle bekannten Teilnehmer antworten
 
@@ -793,7 +800,7 @@ besitzt eine eigene Subscription auf diesem Topic, nimmt eine lokale Lease
 für seine Ressource und sendet `lock.state.v1` an den Rückkanal. Der Koordinator
 abonniert den Rückkanal vor dem Broadcast und zählt **Teilnehmer-IDs**, keine
 Nachrichtenanzahl. Doppelte Antworten erhöhen den Zähler nicht. Erst alle
-positiven Antworten der festen Teilnehmerliste erlauben den nächsten Schritt. [neu]
+positiven Antworten der festen Teilnehmerliste erlauben den nächsten Schritt.
 
 Die Liste ist ein Membership-Snapshot aus der Anwendungskonfiguration, keine
 aus Queue-Subscriber-Zahlen erratene Größe. Erwartete Subscriptions werden
@@ -802,7 +809,7 @@ Timeout; neue Teilnehmer gehören erst zur nächsten Runde. Eine negative
 Antwort oder die Akquise-Deadline bricht die Runde ab und löst einen
 `lock.release.v1`-Broadcast aus. Jede Runde besitzt eine eindeutige ID;
 alte/fremde Antworten werden verworfen. Je Rückkanal läuft nur ein
-zuständiger Koordinator oder ein expliziter Demultiplexer. [neu]
+zuständiger Koordinator oder ein expliziter Demultiplexer.
 
 Der gezeigte `LocalLeaseManager` ist eine **Anwendungsabhängigkeit**, keine
 MQ-API. Erwerb ist idempotent pro Ressource/Runden-ID, hat eine absolute
@@ -810,7 +817,7 @@ begrenzte Gültigkeit und verlängert sich bei Redelivery nicht. Release gibt
 nur die eigene Runde frei und hinterlässt bis zum Ablauf eine Abschlussmarke,
 damit verspätete Acquire-Nachrichten einen freigegebenen Lock nicht erneut
 nehmen. Leases laufen unabhängig vom Queue-Worker ab; dadurch bleiben bei
-Koordinator-Crash oder verlorenem Release keine unbegrenzten Locks zurück. [neu]
+Koordinator-Crash oder verlorenem Release keine unbegrenzten Locks zurück.
 
 „Alle haben ihren lokalen Lock bestätigt“ ist eine koordinierte Barriere,
 kein Beweis eines linearisierbaren globalen Locks oder dauerhafter Gesundheit
@@ -821,14 +828,14 @@ Für geschützte Schreibzugriffe muss die Zielressource deshalb veraltete
 Operationen über einen autoritativen monotonen Fencing-Token ablehnen.
 Die Runden-ID ist nur Korrelation/Ownership, kein solcher Fencing-Token.
 Quorum/Konsens, Membership-Änderung und Lease-Verlängerung sind hier bewusst
-keine Behauptung der Queue-Abstraktion. [neu]
+keine Behauptung der Queue-Abstraktion.
 
 Teilnehmer-IDs aus Reply-Payloads sind allein nicht vertrauenswürdig. Das
 Beispiel setzt kooperative Teilnehmer mit gemeinsamer Entwicklungs-Identität
 voraus. Produktion muss jede Antwort einer erlaubten Teilnehmeridentität
 zuordnen, etwa über getrennte Signing-Keys/Principals oder getrennte
 Reply-Topics mit durchgesetzten Publisher-ACLs. Ein gemeinsamer HMAC-Key
-beweist nicht, welcher Teilnehmer tatsächlich den Lock besitzt. [neu]
+beweist nicht, welcher Teilnehmer tatsächlich den Lock besitzt.
 
 ### § 15.3 Processing-Queue: ein Worker verarbeitet und antwortet
 
@@ -838,14 +845,14 @@ mehrere Prozesse mit `respond('jobs.text', 'text-processors', ...)`.
 erzeugt getrennte Transport-Consumer-IDs; eine Worker-ID dient im Beispiel
 nur als Antwortmetadatum, nicht als neue Subscription. Der Client ruft
 `request('jobs.text', 'text.process.v1', $params)->await()` auf und erhält
-Payload und die Kennung des verarbeitenden Workers zurück. [neu]
+Payload und die Kennung des verarbeitenden Workers zurück.
 
 Die Auswahl erfolgt brokerabhängig anhand verfügbarer Consumer, Credits,
 Prefetch und Polling. „Random“ wird hier als „beliebiger verfügbarer Worker,
 ohne feste Zielinstanz“ verstanden. Gleichmäßiger Zufall, Round-robin oder
 garantierte Fairness sind kein portabler Vertrag; auch mehrere Jobs
 hintereinander beim selben Worker sind zulässig. Wer eine bestimmte
-Verteilungsstrategie benötigt, braucht einen gesonderten Scheduler. [neu]
+Verteilungsstrategie benötigt, braucht einen gesonderten Scheduler.
 
 Pro Zustellversuch wird ein Consumer ausgewählt; ein normaler Job wird
 nicht an alle Worker kopiert. Bei Crash, verlorenem Ack oder Lease-Ablauf
@@ -855,7 +862,7 @@ Worker kann nach Lease-Verlust sogar noch weiterlaufen, während ein neuer
 lange Verarbeitung braucht Lease-Pflege, kritische Aktionen benötigen
 Idempotenz oder ressourcenseitiges Fencing. Das Beispiel verarbeitet reinen
 Text ohne externe Seiteneffekte; Ergebnis-Publish erfolgt gemäß § 13 vor
-Request-Ack. [neu]
+Request-Ack.
 
 ### § 15.4 Spätere Prüfungen und Quellen
 
@@ -863,11 +870,352 @@ Vorgesehene Contract-Tests: Broadcast an drei Subscriptions versus drei
 Worker einer Gruppe, doppelte Teilnehmerantworten, fehlender/negativer
 Teilnehmer, spätes Acquire nach Release, Koordinator-Crash, veraltete Lease,
 falsche Teilnehmeridentität und erneute Job-Ausführung nach Lease-Verlust.
-Diese Tests gehören zur späteren Implementierung, nicht zum Entwurfs-PR. [neu]
+Diese Tests gehören zur späteren Implementierung, nicht zum Entwurfs-PR.
 
-- [Redis XREADGROUP: Verteilung innerhalb von Consumer-Gruppen](https://redis.io/docs/latest/commands/xreadgroup/). [neu]
-- [RabbitMQ Consumers: konkurrierende Consumer und Zustellsteuerung](https://www.rabbitmq.com/docs/consumers). [neu]
-- [Redis: begrenzte Lock-Gültigkeit, Ownership und Fencing-Hinweise](https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/). [neu]
+- [Redis XREADGROUP: Verteilung innerhalb von Consumer-Gruppen](https://redis.io/docs/latest/commands/xreadgroup/).
+- [RabbitMQ Consumers: konkurrierende Consumer und Zustellsteuerung](https://www.rabbitmq.com/docs/consumers).
+- [Redis: begrenzte Lock-Gültigkeit, Ownership und Fencing-Hinweise](https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/).
 
 Abruf: 2026-09-12; die konkrete API und die Barrierenlogik sind der
-hier vorgeschlagene Anwendungsentwurf. [neu]
+hier vorgeschlagene Anwendungsentwurf.
+
+## § 16 Standardisierter Systemcheck und Dienststatus
+
+### § 16.1 Ziel und kleine Schnittstelle
+
+Frontend-Backends und Monitoring sollen frühzeitig erkennen, ob die für eine
+Nachricht benötigten Dienste bereit sind, und dieselbe verständliche Ursache
+erhalten. Ein bekanntes Berechtigungsproblem soll den betroffenen Handler
+deaktivieren können, während der Prozess seinen Zustand weiterhin meldet.
+Der Check ist eine zeitlich begrenzte Bereitschaftsaussage; er kann spätere
+Laufzeitfehler oder einen Ausfall unmittelbar nach der Prüfung nicht ausschließen. [neu]
+
+```php
+$connection = $mq->check(); // Verbindung + lokale Konfiguration, keine Consumer-Zusage.
+$system = $mq->check('jobs.text', 'text.process.v1'); // Erwartete Consumer aus Konfiguration.
+if (!$system->ready) {
+    // Funktion im Frontend als momentan nicht verfügbar kennzeichnen.
+}
+```
+
+Die vorgeschlagene Signatur ist `check(?string $topic = null, ?string $type =
+null, ?CheckOptions $options = null): HealthReport`. Topic und Typ werden
+gemeinsam angegeben oder gemeinsam weggelassen. Mit
+`check(options: new CheckOptions(requireDeclared: true))` werden sämtliche
+in `HealthOptions::requirements` deklarierten Nachrichtenabhängigkeiten
+unter einem gemeinsamen Zeitbudget geprüft; ohne diesen ausdrücklichen
+Schalter bleibt `check()` der reine Verbindungscheck. Eine leere
+Anforderungsliste bei `requireDeclared: true` ist ein Konfigurationsfehler.
+`requireDeclared: true` zusammen mit einem expliziten Topic/Typ ist ungültig. `CheckOptions` enthält
+`timeoutSeconds` (Default 3 Sekunden Gesamtbudget), optional
+`requiredSubscriptions`, `minReadyPerSubscription` (Default 1) und
+`requiredInstances`. Eine `ReadinessRequirement` in `ConnectionOptions::health`
+legt diese Anforderungen je Topic/Typ einmalig fest. Fehlt eine erwartete
+Topologie, meldet der gezielte Check `EXPECTED_CONSUMERS_UNDEFINED`/unknown;
+eine leere Antwortliste ist niemals automatisch ein gesunder Zustand. [neu]
+
+Der reine Verbindungscheck verwendet nur native, nicht verändernde
+Operationen. Ein gezielter Check erzeugt begrenzte Probe-/Reply-Nachrichten
+im reservierten Health-Kanal, aber keine fachlichen Jobs, Test-Logins,
+Dateiuploads oder Handler-Aufrufe. `autoCreate: false` bleibt wirksam: fehlende
+Health-Ressourcen werden gemeldet und nicht im Check heimlich angelegt.
+Ein fehlgeschlagener initialer `connect`-Aufruf bleibt eine Connection-/Auth-
+Exception; `check` untersucht eine bereits erzeugte Connection erneut. [neu]
+
+### § 16.2 Was geprüft wird und welche Aussage daraus folgt
+
+| Prüfung | Positive Aussage | Grenzen / mögliche Probleme |
+|---|---|---|
+| Verbindung | Native Brokeranfrage mit den konfigurierten Zugangsdaten gelingt | Kein Nachweis für Publish-/Consume-Rechte auf allen Topics [neu] |
+| Lokale Konfiguration | Mapping, installierter Connector, Schema-Metadaten und Security-Konfiguration sind auflösbar | Keine Ausführung eines DTO-Konstruktors/Business-Handlers als Probe [neu] |
+| Ziel-Topologie | Topic/Subscription/Binding existieren, soweit der Adapter sie prüfen darf | Ohne Capability/Rechte unknown, niemals erfundener Erfolg [neu] |
+| Consumer-Bereitschaft | Aktuelle Antworten der erwarteten Gruppen/Instanzen, registrierter Handler für Typ, aktive Consume-Bindung und keine blockierende Störung | Consumer-Zähler oder veraltete Redis-Gruppen allein reichen nicht [neu] |
+| Anwendungsabhängigkeiten | Benannte Prüfungen melden z. B. Datenbank, Ausgabeverzeichnis oder Fremddienst bereit | Nur tatsächlich geprüfte Abhängigkeiten; Probe muss seiteneffektfrei sein [neu] |
+| Betriebsprobleme | Optionale, aktuelle Werte für Rückstau, älteste Nachricht, Pending/Retry/Dead Letter und letzte Fehler | Schwellen konfiguriert; nicht messbare Werte sind null/unknown [neu] |
+
+Ein erfolgreicher Health-Roundtrip beweist den Health-Pfad. Er beweist nicht
+automatisch den fachlichen Publish-Pfad, dessen Berechtigungen oder die
+Kompatibilität jeder späteren Payload. Der Bericht nennt deshalb jede
+Prüfung mit Quelle, Zeitpunkt und Grenzen. Schema-/Versionsinformationen
+werden als strukturelle Fähigkeit gemeldet; unterschiedliche lokale PHP-
+Klassennamen oder Schema-Fingerprints sind allein kein Inkompatibilitätsfehler. [neu]
+
+Für eine Processing-Gruppe reicht standardmäßig ein frischer bereiter Worker
+pro erwarteter Subscription. Für Broadcast müssen alle erwarteten
+Subscriptions bereit sein. Sind konkrete Instanzen zwingend, werden ihre
+IDs zusätzlich als fester Snapshot vorgegeben. Ein gesunder Ersatzworker
+genügt dann nicht anstelle einer ausdrücklich verlangten Instanz. Ein
+ausgefallener optionaler Worker bei erfüllter Mindestkapazität kann einen
+degraded-Bericht mit `ready=true` erzeugen. [neu]
+
+### § 16.3 Gemeinsamer Dienstzustand: aktiv melden und auf Ping antworten
+
+`HealthState(serviceId, instanceId)` besitzt die Operation
+`set(string $check, HealthFinding $finding, ?string $topic = null, ?string
+$type = null): void`. Topic und Typ müssen auch hier gemeinsam gesetzt oder weggelassen werden.
+Ein benannter Check wird ersetzt statt als unendliche
+Fehlerliste angehängt. `HealthFinding::healthy`, `degraded`, `unhealthy` und
+`unknown` erzeugen typisierte Befunde mit stabilem Code, sicherem
+`publicMessage` und einer konkreten Handlungsempfehlung `action`. Ohne
+Topic/Typ betrifft der Befund den ganzen Dienst, sonst nur passende Handler.
+Abhängigkeiten beginnen unknown, bis eine echte Prüfung vorliegt. [neu]
+
+`HealthOptions(state: $health, refresh: $probe, refreshIntervalSeconds: 5,
+statusTtlSeconds: 20)` bindet das lokale Zustandsobjekt ein. `refresh` ist
+ein begrenzter, seiteneffektfreier Callback `callable(HealthState): void`, der
+die Befunde aktualisiert. Callback-Exceptions werden als `HEALTH_PROBE_FAILED`
+erfasst; sichere Details bleiben lokal. Ein gleichbleibender Fehler wird
+dedupliziert, bei Änderung entsteht unmittelbar eine Statusmeldung, zusätzlich
+gibt es begrenzte Aktualisierungen mit Ablaufzeit. Die Zahlen sind
+Entwurfsdefaults, keine universellen Betriebsintervalle. Vor dem Binden an
+eine Connection aktualisiert `set` nur den lokalen Zustand; beim Start wird
+dieser veröffentlicht. Synchrones PHP kann einen hängenden Probe-Callback
+nicht präemptiv abbrechen: Abhängigkeitsclients müssen eigene kurze Timeouts
+einhalten. Harte Ausführungsgrenzen benötigen Prozessisolation. [neu]
+
+Registrierte `subscribe`-/`respond`-Handler, tatsächliche Consume-Bindungen
+und deren Zustand werden von der Library ergänzt. Eine Anwendung darf mit
+`set(...healthy...)` eine fehlende Registrierung, Authentifizierung oder
+geschlossene Verbindung nicht überstimmen. Probe-Antworten und aktive
+`system.health.v1`-Events stammen aus derselben Snapshot-Erzeugung; ein
+Frontend muss keine unterschiedlichen Fehlerformate je Dienst verstehen. [neu]
+
+Ein negativer Pflichtbefund pausiert nur die betroffene Verarbeitung. Der
+Worker bleibt im Health-/Recovery-Loop erreichbar, prüft mit Backoff erneut
+und nimmt Arbeit erst nach erfolgreicher Wiederherstellung an. Bei einem
+Berechtigungsfehler wird also nicht einfach der Container beendet. Tritt
+der Fehler nach der letzten Prüfung im Handler auf, setzt die Anwendung
+den gleichen Befund und wirft eine passende Retry-/Reject-Exception; die
+Library bestätigt die fehlgeschlagene Verarbeitung nicht als Erfolg. [neu]
+
+Die Runtime fragt für pausierte Ziele keine neuen Jobs ab. Bereits zugestellte
+Nachrichten werden nach der Lease-/Retry-Policy verzögert freigegeben oder
+begrenzt gehalten, nicht engmaschig konsumiert und erneut veröffentlicht.
+Health-Probes sind davon getrennt. Unterbrechungsschutz, sichere Fehlerablage
+und die bestehenden Retry-Grenzen bleiben wirksam. [neu]
+
+### § 16.4 Health-Kanal, Ausfälle und Authentifizierung
+
+Health ist eine reservierte Erweiterung mit `system.health.probe.v1`,
+`system.health.reply.v1` und `system.health.v1`. Ein Probe enthält Probe-ID,
+Ziel-Topic/-Typ, erwartete Subscriptions/Instanzen und Deadline. Pro Instanz
+gibt es eine eigene Control-Subscription; Antworten werden je verifizierter
+Instanz und Probe-ID aggregiert, nicht wie normales RPC nach der ersten
+Antwort beendet. Pflichtinstanzen werden nicht aus Antwortzahlen erraten.
+Interne Health-Nachrichten durchlaufen Signierung und Größenlimits, aber
+keine fachlichen Handler oder rekursiv meldende Diagnose-Middleware. [neu]
+
+Die Standardeinstellungen benutzen einen reservierten konfigurierbaren
+Namespace, etwa `_phore.health.probes`, `_phore.health.status` und
+`_phore.health.replies.<monitorId>`. Reply-Ziele sind lokal provisionierte,
+berechtigte Namen, niemals DSNs aus einem Probe. Zugriffe, Service- und
+Instanzzuordnung müssen über verifizierte Identitäten/Keys beziehungsweise
+Broker-ACLs begrenzt sein. Ein gemeinsamer Entwicklungs-HMAC-Key ist keine
+verlässliche Identität einzelner Dienste oder Mandanten. [neu]
+
+Verliert ein Dienst die Berechtigung für seinen fachlichen Kanal, kann er
+über einen separat berechtigten Health-Kanal weiter antworten. Verliert er
+auch diesen Zugang, kann er den Fehler **nicht über genau diese defekte
+Verbindung zuverlässig melden**. Der Monitor markiert nach TTL/Deadline
+den Zustand unknown/stale, mit letzter bekannter Ursache ausdrücklich als
+historischer Information. Eine aktuelle Ursache ist dann nicht automatisch
+bestimmbar; Timeout darf nicht als bewiesener Rechtefehler ausgegeben werden. [neu]
+
+Für unabhängig verfügbare Diagnose kann `HealthOptions::controlConnection`
+eine explizit injizierte separate Verbindung mit begrenzten Rechten verwenden.
+Ein `HealthOptions`-gebundener reiner Diagnose-Client kann über `run()` den
+Health-State auch dann bedienen, wenn der Aufbau der Business-Connection
+scheitert; die Anwendung trägt deren bekannte Fehlerursache in den geteilten
+State ein. Für Totalverlust der MQ-Infrastruktur kann derselbe Snapshot
+über einen externen HTTP-/Monitoring-Adapter exportiert werden. Weder
+HTTP-Server noch neue Zugangsdaten werden implizit erzeugt. [neu]
+
+Eine zusätzliche Socket-Verbindung bedeutet keine parallele PHP-Ausführung.
+Ein synchron blockierter Handler kann Probe-Antworten verzögern. Die
+Health-Runtime kann zwischen Jobs und in Recovery-Phasen antworten; für
+Antworten während beliebig langer blockierender Arbeit ist ein separat
+überwachter Prozess oder ein ausdrücklich unterstütztes asynchrones
+Laufzeitmodell erforderlich. Auch der Checker konsumiert ausschließlich
+seinen internen Rückkanal; reentrante `check`-/`run`-/`await`-Loops auf derselben
+Connection sind ungültig. [neu]
+
+### § 16.5 Versioniertes Ergebnis und stabile Fehlercodes
+
+`HealthReport` ist eine schreibgeschützte DTO-Struktur mit `toArray()` für
+JSON-Ausgabe. Probe- und Push-Berichte teilen denselben Vertrag:
+`reportVersion`, `reportId`, `kind` (instance/aggregate), `scope`, `checkedAt`,
+`expiresAt`, `durationMs`, `status`, `ready`, `checks`, `consumers`, `issues`.
+Ein Einzelbericht hat zusätzlich `serviceId`, `instanceId`, `generation`
+(zufällige Start-ID) und `sequence` (monoton innerhalb dieser Generation).
+Ein Aggregate enthält die ausgewerteten Einzelberichte/Referenzen.
+Ein Check aller deklarierten Abhängigkeiten hat `scope=system` und zusätzlich
+`targets`: eine Liste vollständiger Zielberichte mit `topic` und `type`.
+Ein gezielter Bericht hat `scope=message` mit diesen beiden Zielfeldern.
+`ready` des Systemberichts setzt alle als erforderlich deklarierten Ziele
+voraus; eine frontendseitig optionale Funktion bleibt einzeln auswertbar. [neu]
+
+| Status | Bedeutung | Einfluss auf `ready` |
+|---|---|---|
+| `healthy` | Alle angeforderten Pflichtprüfungen aktuell positiv, keine bekannten Zusatzprobleme | true für den ausgewiesenen Scope [neu] |
+| `degraded` | Pflichtanforderungen erfüllt, aber Warnung, optionale Messlücke oder reduzierte Redundanz | true, solange keine blockierende Schwelle überschritten ist [neu] |
+| `unhealthy` | Mindestens eine Pflichtanforderung nachweislich verletzt | false [neu] |
+| `unknown` | Mindestens eine Pflichtanforderung ungeprüft, nicht beantwortet oder veraltet | false [neu] |
+
+Aggregationsreihenfolge: nachgewiesener Pflichtfehler vor Pflicht-Ungewissheit,
+danach degraded und healthy. Findings optionaler Prüfungen blockieren keine
+erfüllte Bereitschaft, bleiben aber als Problem sichtbar. Ein Brokerfehler
+blockiert den Gesamtscope, auch wenn ein alter Consumer-Bericht noch positiv
+ist. `check()` ohne Ziel darf `ready=true` nur für `scope=connection`
+ausweisen; Frontends dürfen daraus keine Freigabe einer Funktion ableiten. [neu]
+
+Checks enthalten `name`, `status`, `required`, `source`, `observedAt` und
+`expiresAt`. Issues enthalten `code`, `severity`, `publicMessage`, `action`
+und Ziel-/Dienstbezug. Consumer-Zeilen enthalten Subscription, Service,
+Instanz, Handler-Typ, Zustand und Frische. Messwerte ohne Messung sind null,
+nicht null Sekunden oder null wartende Jobs. Stabile Codes sind unter
+anderem `BROKER_UNREACHABLE`, `AUTHENTICATION_FAILED`, `AUTHORIZATION_DENIED`,
+`HANDLER_NOT_REGISTERED`, `SCHEMA_UNAVAILABLE`, `DEPENDENCY_UNAVAILABLE`,
+`OUTPUT_PERMISSION_DENIED`, `CONSUMER_NOT_RESPONDING`, `STATUS_STALE`,
+`HEALTH_CHANNEL_UNAVAILABLE`, `INSUFFICIENT_READY_CONSUMERS`,
+`EXPECTED_CONSUMERS_UNDEFINED`, `METRIC_UNAVAILABLE` und `BACKLOG_HIGH`. [neu]
+
+Erwartete Betriebsprobleme werden im Report zurückgegeben, damit ein
+Monitoringaufruf nicht beim ersten unerreichbaren Dienst abbricht. Ungültige
+Check-Konfiguration wirft `InvalidHealthCheckException`; sonst bleibt die
+Gesamtdeadline wirksam und unvollständige Teilprüfungen werden unknown.
+Exceptions/OS-Fehler im Dienst werden gezielt auf Codes abgebildet, nicht
+anhand beliebiger Fehlertexte erraten. Rohpfade, Zugangsdaten, Stacktraces
+und interne Details gehören nicht in `publicMessage`. [neu]
+
+### § 16.6 Frontend, Login und Überwachung
+
+Beim Login kann das Backend einmal die für das Frontend benötigten
+Topic-/Typ-Ziele prüfen und dem Browser pro Funktion `ready`, `status`,
+`expiresAt` und freigegebene Fehlertexte liefern. Der Browser erhält keine
+Broker-Credentials. Eine ausgefallene optionale Funktion muss nicht die
+gesamte Anmeldung blockieren; die Anwendung legt fest, welche Funktionen
+zwingend benötigt werden. Beispiel 09 zeigt eine solche Backend-Antwort. [neu]
+
+Ein zentraler Monitor abonniert `system.health.v1`-Events, aktualisiert
+die Sicht und meldet Zustandswechsel frühzeitig. Push verkürzt die
+Erkennungszeit; periodische aktive Checks und Ablaufzeiten decken verlorene
+Events oder verschwundene Dienste ab. Ein einmaliger Login-Check bleibt
+nicht für die ganze Sitzung gültig: nach Ablauf wird erneut geprüft oder
+eine frische, autorisierte Monitor-Sicht verwendet. Recovery-Meldungen
+heben einen Fehler erst nach erfolgreicher Prüfung auf. [neu]
+
+Der Collector dedupliziert generation/sequence pro Instanz und akzeptiert
+keine Rückstufung auf eine ältere Sequenz. Eine neue Startgeneration wird
+über eine aktuelle authentifizierte Probe oder vertrauenswürdige
+Registrierung bestätigt, nicht anhand beliebiger verspäteter Events. Fremde
+Probe-IDs, abgelaufene Berichte und ungültige Signaturen bleiben außerhalb
+der aktuellen Bereitschaft. Ein einfaches `subscribe` allein ist noch kein
+solcher vollständiger Collector; Beispiel 09 zeigt die Event-Anbindung. [neu]
+
+Die Benachrichtigungsintegration dedupliziert gleiche Ursachen und kann
+Hysterese/Backoff verwenden. Sie ist ein Adapter, keine eingebaute E-Mail-
+oder Browser-Push-Plattform. Runtime-Fehlerbehandlung, Exceptions und
+Idempotenz bleiben auch nach positivem Check erforderlich. [neu]
+
+### § 16.7 Beispiel, Ausbaustufe und spätere Prüfungen
+
+[Beispiel 09](../../examples/api-draft/09-system-check.php) enthält einen
+Worker mit standardisierter Schreibrechte-Prüfung, aktiver Statusmeldung
+und automatischem Pausieren/Wiederaufnehmen sowie gezielte Checks, eine
+Frontend-Antwort und ein Monitor-Abonnement. Es ist wie alle Beispiele
+ausschließlich API-Entwurf, keine bereitgestellte Health-Implementierung. [neu]
+
+Erster Health-Ausbau: lokaler State, Verbindungsprobe, signierte Bereitschafts-
+Probes, Instanz-/Gruppenaggregation, Push-/Recovery-Berichte und JSON-Vertrag.
+Metrikadapter und externe Exporte sind optionale Erweiterungen. Vorgesehene
+Tests: Broker erreichbar bei fehlendem Handler, Rechtefehler bei lebendem
+Prozess, Status-Recovery, fehlende/falsche Instanz, Mindestkapazität versus
+alle Teilnehmer, falsche Signatur, TTL/Sequenzen/Startgeneration, verlorene
+Statusmeldung, blockierter Health-Kanal, hängender Probe-Callback und
+Deadline-Verbrauch über mehrere Ziele. Keine fachlichen Nachrichten oder
+automatischen Ressourcenänderungen durch einen Check. [neu]
+
+Primärquellen: [Redis PING](https://redis.io/docs/latest/commands/ping/) für
+den eng begrenzten Verbindungsnachweis und [RabbitMQ Monitoring](https://www.rabbitmq.com/docs/monitoring)
+für die Unterscheidung von Broker-, Queue- und Anwendungszustand; abgerufen
+am 2026-09-12. Der einheitliche API-/Statusvertrag ist der hier vorgeschlagene
+Entwurf, kein behaupteter branchenweiter Standard. [neu]
+
+
+### § 16.8 Deklarierte Abhängigkeiten und Listenerdiagnose
+
+Die Anwendung erklärt in `HealthOptions::requirements`, welche Topic-/Typ-Paare
+sie benötigt. `ReadinessRequirement(topic, type, subscriptions,
+minReadyPerSubscription: 1)` beschreibt die erwarteten verarbeitenden Gruppen.
+Eine eigene `subscribe`-Registrierung erklärt dagegen, was diese Anwendung
+selbst empfängt; daraus wird keine Abhängigkeit von fremden Verarbeitern
+erraten. Beide Richtungen bleiben im Statusbericht sichtbar. [neu]
+
+Jede Consumer-Zeile enthält `subscription`, `serviceId`, `instanceId`, `topic`,
+`type`, `status`, `ready`, `observedAt`, `expiresAt`, `issues` und optional
+`diagnostics`. Der Runtime-Registry-Eintrag stammt aus tatsächlich registrierten
+Handlern und der Consume-Bindung. Ein Listener kann also vorhanden, aber wegen
+eines Rechtefehlers nicht bereit sein. Meldungen können nicht garantieren,
+dass ein kurz danach abgestürzter Prozess noch vorhanden ist. [neu]
+
+`presence` unterscheidet `present`, `absent`, `unknown`. `present` verlangt einen
+frischen verifizierten Instanznachweis. `absent`/`NO_LISTENER` ist nur zulässig,
+wenn eine autoritative aktuelle Registry/Connector-Sicht die Abwesenheit für
+diesen Scope bestätigt. Ein fehlendes Probe-Reply bedeutet ansonsten
+`unknown` mit `CONSUMER_NOT_RESPONDING`; ein alter Eintrag `STATUS_STALE`.
+Auch die Aussage „kein Listener“ ist daher mit Quelle und Messzeit versehen.
+Die Library darf nicht aus einem leeren Antwortarray Abwesenheit beweisen. [neu]
+
+`HealthOptions::diagnostics` ist ein optionaler begrenzter Callback ohne
+Parameter, der Betriebsdaten als Array liefert. Standardfelder sind `host`
+(String oder null), `processMemoryBytes`, `processPeakMemoryBytes` und optional
+`containerMemoryBytes` (je nichtnegative Integer oder null), mit gemeinsamer
+`observedAt`-Zeit der Runtime. Prozesswerte im PHP-Beispiel messen den
+PHP-Allocator, nicht RSS oder den ganzen Container. Containerwerte benötigen
+einen eigenen passenden Adapter; Einheiten stehen im Feldnamen. Erweiterungen
+verwenden einen anwendungseigenen Namensraum. Größenlimits und eine Allowlist
+verhindern unbegrenzte Diagnose-Payloads. Ohne Provider fehlen die optionalen
+Daten; das allein blockiert keine Bereitschaft. [neu]
+
+Hostnamen und detaillierte Betriebsdaten sind für berechtigte interne
+Überwachung opt-in, nicht automatisch Teil einer Browserantwort. Eine hohe
+Speicherzahl ist zunächst eine Messung. Erst eine explizite Schwellenprüfung
+setzt etwa einen degraded-Befund; eine überschrittene blockierende Grenze
+muss als Pflichtbefund definiert sein. Die Library erfindet keine universell
+passenden Speichergrenzen. [neu]
+
+Beispiel einer Consumer-Zeile im standardisierten Bericht (synthetische Werte;
+der vollständige Bericht hat zusätzlich die Felder aus § 16.5): [neu]
+
+```json
+{
+  "subscription": "export-workers",
+  "serviceId": "export-service",
+  "instanceId": "export-2",
+  "topic": "jobs.export",
+  "type": "export.create.v1",
+  "presence": "present",
+  "status": "unhealthy",
+  "ready": false,
+  "observedAt": "2026-09-12T12:00:00Z",
+  "expiresAt": "2026-09-12T12:00:20Z",
+  "diagnostics": {
+    "host": "worker-host-02",
+    "processMemoryBytes": 33554432,
+    "processPeakMemoryBytes": 41943040,
+    "observedAt": "2026-09-12T12:00:00Z"
+  },
+  "issues": [{
+    "code": "OUTPUT_PERMISSION_DENIED",
+    "severity": "error",
+    "publicMessage": "Der Exportdienst kann sein Ausgabeziel nicht beschreiben.",
+    "action": "Berechtigungen des Ausgabeziels prüfen.",
+    "serviceId": "export-service",
+    "instanceId": "export-2"
+  }]
+}
+```
+
+Zusätzliche spätere Contract-Tests: deklarierte Mehrzielprüfung unter einem
+Gesamtbudget, nachgewiesene Abwesenheit versus Timeout, vorhandener unbereiter
+Listener, Dateneinheiten/null, Diagnose-ACL und Browser-Allowlist. [neu]
