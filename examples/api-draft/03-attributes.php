@@ -6,7 +6,10 @@ namespace Examples\MessageQueue\Attributes;
 
 use Phore\MessageQueue\Attribute\MessageType;
 use Phore\MessageQueue\Attribute\Subscribe;
-use Phore\MessageQueue\ConnectionFactory;
+use Phore\MessageQueue\PhoreMQ;
+use Phore\MessageQueue\SubscriptionOptions;
+use Phore\MessageQueue\Exception\MessageMappingException;
+use Phore\MessageQueue\Exception\InvalidHandlerException;
 use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\MessageQueueInterface;
@@ -20,7 +23,8 @@ use Phore\MessageQueue\Security\HmacSecurity;
  * liegen. Hier bleiben alle Teile zum Lesen in einer Beispieldatei.
  */
 
-#[MessageType('user.created.v1', topic: 'users')]
+// Feste Gruppe: mehrere Worker mit dieser Vorgabe TEILEN die Zustellungen.
+#[MessageType('user.created.v1', topic: 'users', subscription: 'sdk-users')]
 final class T_UserCreated
 {
     public string $userId;
@@ -29,8 +33,8 @@ final class T_UserCreated
 
 final class UserHandlers
 {
-    // Topic/Subscription stehen am Handler, die Klasse ergibt sich per Reflection.
-    #[Subscribe(topic: 'users', subscription: 'sdk-users', type: 'user.created.v1')]
+    // Alle drei Werte kommen aus T_UserCreated. Keine doppelte Definition.
+    #[Subscribe]
     public function onCreated(T_UserCreated $user, MessageContext $context): void
     {
         printf("SDK: %s / %s\n", $context->messageId, $user->email);
@@ -47,7 +51,7 @@ final class UserHandlers
 
 function createConnection(string $dsn, string $sharedSecret): MessageQueueInterface
 {
-    return (new ConnectionFactory())->connect($dsn, new ConnectionOptions(
+    return new PhoreMQ($dsn, new ConnectionOptions(
         security: new HmacSecurity(
             sharedSecret: $sharedSecret,
             keyId: 'development-1',
@@ -77,7 +81,7 @@ function demo(string $dsn, string $sharedSecret): void
 {
     $mq = createConnection($dsn, $sharedSecret);
     try {
-        // Explizite Registrierung, keine Magie und kein Container erforderlich.
+        // Attributvariante: Resolver liest Methodensignatur und DTO-Metadaten.
         $mq->registerHandlers(new UserHandlers());
         send($mq);
         $mq->run(new RunOptions(maxMessages: 4, maxSeconds: 10));
@@ -89,3 +93,96 @@ function demo(string $dsn, string $sharedSecret): void
 // Getrennte Prozesse: Empfänger legt/bindet Subscriptions vor dem ersten Senden
 // an und ruft run() auf. Sender ruft danach send() auf seiner eigenen Connection
 // auf. Beide verwenden denselben Broker-Prefix, HMAC-Key und dieselbe Audience.
+
+
+// Alternative zur Attributregistrierung: nur den Callback übergeben.
+// Auf einer eigenen MQ-Instanz statt demo()/registerHandlers() ausführen.
+function demoCallback(string $dsn, string $sharedSecret): void
+{
+    $mq = createConnection($dsn, $sharedSecret);
+    try {
+        $mq->subscribe(function (T_UserCreated $user, MessageContext $context): void {
+            printf("Callback: %s / %s\n", $context->messageId, $user->email);
+        }); // users + sdk-users + user.created.v1; automatische Hydration.
+        send($mq);
+        // Empfangsschleife für registrierte Handler, kein verzögertes emit/publish.
+        $mq->run(new RunOptions(maxMessages: 2, maxSeconds: 10));
+    } finally {
+        $mq->close();
+    }
+}
+
+// Alternativ ist auch $mq->subscribe([$handlers, 'onCreated']) möglich.
+// NICHT zusätzlich dieselbe Methode über registerHandlers() registrieren.
+
+// Dieser Contract ist topic- und gruppenunabhängig; der Wire-Typ steht nur hier.
+#[MessageType('audit.entry.v1')]
+final class T_AuditEntry
+{
+    public string $text;
+}
+
+final class AuditHandlers
+{
+    // Nur offene Angaben ergänzen; type ergibt sich aus T_AuditEntry.
+    #[Subscribe(topic: 'audit.users', subscription: 'audit-reader')]
+    public function onEntry(T_AuditEntry $entry): void
+    {
+        printf("Audit: %s\n", $entry->text);
+    }
+}
+
+function demoMultipleTopics(string $dsn, string $sharedSecret): void
+{
+    $mq = createConnection($dsn, $sharedSecret);
+    try {
+        $handler = static function (T_AuditEntry $entry): void {
+            printf("Audit: %s\n", $entry->text);
+        };
+        foreach (['audit.users', 'audit.billing'] as $topic) {
+            $mq->subscribe($handler, options: new SubscriptionOptions(
+                topic: $topic, subscription: 'audit-reader',
+            ));
+        }
+        // Alternative für audit.users: registerHandlers(new AuditHandlers()).
+        // Die Alternative ersetzt dessen obige Registrierung, nicht zusätzlich aufrufen.
+        $entry = new T_AuditEntry();
+        $entry->text = 'Ein Vorgang wurde abgeschlossen.';
+        $mq->publish('audit.users', 'audit.entry.v1', $entry);
+        $mq->publish('audit.billing', 'audit.entry.v1', $entry);
+        // emit($entry) wäre MAPPING_INCOMPLETE: kein festes Topic auf diesem DTO.
+        $mq->run(new RunOptions(maxMessages: 2, maxSeconds: 10));
+    } finally {
+        $mq->close();
+    }
+}
+
+// Separates Fehlerbeispiel; kein Workerstart, kein Senden erforderlich.
+function demonstrateConflicts(MessageQueueInterface $mq): void
+{
+    $typed = static function (T_UserCreated $event): void {};
+    try {
+        $mq->subscribe($typed, options: new SubscriptionOptions(topic: 'other.users'));
+    } catch (MessageMappingException $error) {
+        // MAPPING_CONFLICT: field=topic, MessageType=users, options=other.users.
+        // Ablehnung vor Broker-Binding; kein stilles Überschreiben.
+    }
+
+    try {
+        $mq->subscribe(static function (T_AuditEntry $entry): void {});
+    } catch (MessageMappingException $error) {
+        // MAPPING_INCOMPLETE: missingFields=[topic, subscription].
+    }
+
+    $subscription = $mq->subscribe($typed);
+    try {
+        try {
+            $mq->subscribe($typed);
+        } catch (InvalidHandlerException $error) {
+            // DUPLICATE_SUBSCRIPTION: users/sdk-users bereits lokal registriert.
+            // Derselbe Gruppenname in einem anderen Workerprozess ist dagegen erlaubt.
+        }
+    } finally {
+        $subscription->cancel(); // Lokales Binding lösen; dauerhafte Gruppe bleibt bestehen.
+    }
+}

@@ -49,6 +49,13 @@ Die `ConnectionFactory` liefert ebenfalls `PhoreMQ`, das
 `MessageQueueInterface` implementiert. Einmal je Verbindung erzeugen,
 wiederverwenden und mit `close()` freigeben; beide Wege verbinden sofort.
 
+`subscribe($callback)` übernimmt Topic, Subscription und Wire-Typ aus dem
+Mapping des ersten DTO-Parameters; am Handler reicht alternativ `#[Subscribe]`.
+Offene Werte werden explizit ergänzt, widersprüchliche feste Angaben und
+doppelte lokale Bindungen schon beim Registrieren abgelehnt. Für mehrere
+Topics bleibt das Topic am Contract offen; feste Subscriptions bedeuten
+konkurrierende Worker. Siehe [Attributbeispiele](examples/api-draft/03-attributes.php).
+
 ## Git Submodules
 
 Beim Klonen direkt mit auschecken:

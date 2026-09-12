@@ -7,6 +7,7 @@
 | 2026-09-12 | dermatthes | §§ 2, 12, 13.2, 15: Broadcast mit allen Lock-Antworten und Processing-Queue mit konkurrierenden Workern ergänzt |
 | 2026-09-12 | dermatthes | §§ 1.1, 16: Standardisierte Systemchecks, deklarierte Nachrichtenabhängigkeiten, Listenerdiagnose und Frontend-/Monitoring-Anbindung ergänzt |
 | 2026-09-12 | dermatthes | §§ 1, 1.1, 3, 4: PhoreMQ als zentrales Objekt mit DSN-/Connector-Konstruktor und gleichwertiger Factory-Erzeugung ergänzt |
+| 2026-09-12 | dermatthes | §§ 5, 6, 6.2, 11: Callback-Kurzform, abgeleitete Metadaten, offene Topics und frühe Konfliktprüfung ergänzt |
 
 ## § 1 Abstract und Lieferumfang
 
@@ -19,7 +20,7 @@ dürfen sich zwischen Anwendungen unterscheiden. `phore/schema` validiert und
 hydriert optional die lokal erwartete Struktur. PHP-Attribute ergänzen die
 programmatische API. Signierung und Dateispeicher sind austauschbare Dienste.
 Eine optionale Request/Reply-Schicht ergänzt RPC mit Rückgabewerten und
-Begleitmeldungen; Metadaten und Middleware bleiben vom Payload getrennt. [geändert]
+Begleitmeldungen; Metadaten und Middleware bleiben vom Payload getrennt.
 
 **Dies ist ein Entwurf, keine implementierte oder installierbare API.** Das
 Ziel-Repository enthält bisher nur die Projektvorlage, keine `src/`- oder
@@ -46,7 +47,7 @@ nicht stillschweigend auf schwächere Semantik zurückfallen.
 Die Empfehlung ist die konkrete Queue-Fassade `PhoreMQ`, die
 `MessageQueueInterface` implementiert, mit **fünf alltäglichen Operationen**.
 Event, Request und Antwort-Handler sind am Verb erkennbar; Broker, Routing,
-Schema und Middleware werden einmal am Objekt konfiguriert. [geändert]
+Schema und Middleware werden einmal am Objekt konfiguriert.
 
 ```php
 $mq = new PhoreMQ($dsn, $options); // Einmal erzeugen; DSN oder Connector.
@@ -69,7 +70,7 @@ der Komfortaufruf für `publish` mit Mapping; Attribute registrieren dieselben
 Handler. Es gibt keine zweite RPC-Client-Fassade, kein eigenes Promise-Framework,
 keinen Container-Zwang und kein mehrdeutiges `dispatch(..., true)`. Erweiterungen
 kommen über Optionsobjekte und zwei Middleware-Hooks; Signierung, Codec und
-Konnektoren sind Infrastruktur-Schnittstellen, keine Pflicht im täglichen Code. [geändert]
+Konnektoren sind Infrastruktur-Schnittstellen, keine Pflicht im täglichen Code.
 
 Für Diagnose gibt es zusätzlich genau einen Queue-Aufruf `check()`.
 Dienstentwickler melden Zustandsänderungen über `HealthState::set()` in einem
@@ -119,8 +120,8 @@ lokale Bindung, löscht aber weder Subscription noch Rückstand.
 
 | Baustein | Verantwortung |
 |---|---|
-| `ConnectionFactory` / `ConnectionOptions` | Alternative Erzeugung von `PhoreMQ` und gemeinsame Konfiguration; dieselbe DSN-Auflösung wie im Konstruktor [geändert] |
-| `PhoreMQ` | Zentrales Objekt; akzeptiert DSN oder Connector und Optionen, implementiert `MessageQueueInterface` und verwaltet den Lebenszyklus [neu] |
+| `ConnectionFactory` / `ConnectionOptions` | Alternative Erzeugung von `PhoreMQ` und gemeinsame Konfiguration; dieselbe DSN-Auflösung wie im Konstruktor |
+| `PhoreMQ` | Zentrales Objekt; akzeptiert DSN oder Connector und Optionen, implementiert `MessageQueueInterface` und verwaltet den Lebenszyklus |
 | `MessageQueueInterface` | `publish`, `subscribe`, `request`, `respond`, `run`; Mapping-Komfort und Lebenszyklus gemäß § 1.1 |
 | `MessageRegistry` | Fachliche Namen, Sendeklassen, optionale Schemas und Default-Topics zuordnen |
 | `MessageCodecInterface` | JSON-kompatible Daten normalisieren, Envelope serialisieren und dekodieren |
@@ -158,7 +159,7 @@ Ein Provider kann auch verschlüsseln; HMAC allein tut dies nicht.
 
 [Vollständige Beispiele: 01-connect.php](../../examples/api-draft/01-connect.php).
 Der normale Einstieg erzeugt unmittelbar das zentrale Objekt; die Varianten
-sind Alternativen, nicht mehrere benötigte Verbindungen: [geändert]
+sind Alternativen, nicht mehrere benötigte Verbindungen:
 
 ```php
 use Phore\MessageQueue\PhoreMQ;
@@ -177,7 +178,7 @@ $mq = $factory->fromAttributes(LocalConnection::class, $options); // PhoreMQ
 ```
 
 Vorgeschlagene öffentliche Erzeugungssignaturen (Deklarationsauszug,
-keine Implementierung): [neu]
+keine Implementierung):
 
 ```php
 // Phore\MessageQueue\PhoreMQ implements MessageQueueInterface
@@ -199,7 +200,7 @@ kommen aus DSN oder Connector-Konfiguration; Schema, Security, Routing,
 Middleware, RPC, Health und Dateispeicher aus `ConnectionOptions`. Sämtliche
 Einstellungen werden damit beim Erzeugen übergeben. Es gibt keine parallelen
 DSN-/Connector-Felder im Optionsobjekt, keine später notwendigen Setter und
-kein zusätzliches `connect()` auf dem MQ-Objekt. [neu]
+kein zusätzliches `connect()` auf dem MQ-Objekt.
 
 `null` bedeutet ein frisches Optionsobjekt mit denselben dokumentierten
 Defaults für alle Erzeugungswege, kein implizites Lesen von Environment oder
@@ -207,7 +208,7 @@ Secrets. Erforderliche Security-/Provider-Konfiguration muss weiterhin
 explizit vorliegen; fehlende Konfiguration wird nicht durch unsichere Defaults
 ersetzt. Konfiguration wird beim Erzeugen validiert und als Snapshot verwendet;
 spätere Mutation des Optionsobjekts ändert das laufende MQ nicht. Explizit
-zustandsbehaftete injizierte Dienste wie `HealthState` bleiben dagegen geteilt. [neu]
+zustandsbehaftete injizierte Dienste wie `HealthState` bleiben dagegen geteilt.
 
 Konstruktor und Factory bauen die Verbindung sofort mit begrenztem
 Verbindungstimeout auf. Erfolgreiche Rückkehr liefert ein verwendbares
@@ -215,7 +216,7 @@ Verbindungstimeout auf. Erfolgreiche Rückkehr liefert ein verwendbares
 Bereitschaft (dafür `check`). Beide Wege werfen dieselben Konfigurations-,
 DSN-, Verbindungs- und Auth-Exceptions aus § 11. Teilweise geöffnete eigene
 Ressourcen werden bei einem Fehler freigegeben. Kein verstecktes Lazy-Connect
-mit erst beim ersten Publish auftretendem initialem Verbindungsfehler. [neu]
+mit erst beim ersten Publish auftretendem initialem Verbindungsfehler.
 
 Eine interne gemeinsame Initialisierung löst DSNs auf, validiert Optionen
 und bindet Connector und Dienste genau einmal. Die Factory delegiert an
@@ -224,7 +225,7 @@ Factory auf. Direkte Connector-Injektion umgeht ausschließlich die DSN-
 Auflösung, niemals Security, Codec, Middleware oder Capability-Prüfungen.
 Die Factory gibt das `PhoreMQ` selbst zurück, keinen zusätzlichen Wrapper.
 Anwendungscode kann für austauschbare Abhängigkeiten weiterhin gegen
-`MessageQueueInterface` typisieren. [neu]
+`MessageQueueInterface` typisieren.
 
 Ein MQ-Objekt wird einmal je Verbindung und Prozess erzeugt und für alle
 zugehörigen Topics, Registrierungen, RPC und Checks wiederverwendet; kein
@@ -234,7 +235,7 @@ Transportressourcen, `stop()` beendet nur den Worker-Loop. Ein an `PhoreMQ`
 auch beim gescheiterten Aufbau; er darf nicht gleichzeitig in ein zweites
 MQ-Objekt injiziert werden. Für geteilte In-Memory-Daten erhält jedes MQ einen
 eigenen Connector am selben `InMemoryBroker`. Separate RPC-/Health-Verbindungen
-bleiben bei den in §§ 13 und 16 beschriebenen Laufzeitanforderungen nötig. [neu]
+bleiben bei den in §§ 13 und 16 beschriebenen Laufzeitanforderungen nötig.
 
 `fromAttributes` liest genau eine lokal angegebene Klasse mit
 `#[QueueConnection(dsn: ...)]`; kein automatisches Scannen des Dateisystems.
@@ -244,12 +245,12 @@ an der Factory über `registerConnectorFactory(scheme, factory)` registriert
 werden. Diese Registrierung verändert keine globale Registry: der einfache
 Konstruktor kennt nur die freigegebenen Standard-Schemes; für eigene Schemes
 nutzt man die konfigurierte Factory oder injiziert den Connector direkt.
-Unbekannte Schemes/Optionen werden in beiden Wegen abgelehnt. [geändert]
+Unbekannte Schemes/Optionen werden in beiden Wegen abgelehnt.
 
 Vorgesehene spätere Contract-Tests: gleicher konkreter Rückgabetyp und
 Funktionsumfang, gleiche Defaults/Exceptions/Sicherheitskette, einmaliger
 Verbindungsaufbau, Ressourcenfreigabe bei Teilfehlern, exklusives Connector-
-Ownership und idempotentes `close`. In diesem PR bleibt dies API-Entwurf. [neu]
+Ownership und idempotentes `close`. In diesem PR bleibt dies API-Entwurf.
 
 | Vorgeschlagene DSN | Bedeutung |
 |---|---|
@@ -257,7 +258,7 @@ Ownership und idempotentes `close`. In diesem PR bleibt dies API-Entwurf. [neu]
 | `rediss://user:password@host:6380/0` | Redis über TLS mit Zertifikatsprüfung |
 | `redis://:password@host:6379/0` | Redis-Passwort ohne ACL-Benutzer |
 | `redis+unix:///run/redis/redis.sock?db=0` | Redis-Server über Unix-Socket, weiterhin Redis-Protokoll |
-| `memory://` | Isolierter In-Memory-Broker je MQ-Erzeugung [geändert] |
+| `memory://` | Isolierter In-Memory-Broker je MQ-Erzeugung |
 | `unix:///run/user/1000/phore-mq.sock` | Eigenes lokales MQ-Protokoll, benötigt separaten Dev-Broker |
 | `sqs://eu-central-1/123456789012` | Geplanter Queue-Adapter; logische Topics per Routingtabelle auf Queue-URLs abbilden |
 | `sns+sqs://eu-central-1/123456789012` | Geplanter Topic-Fan-out; SNS-ARNs und Subscription-Queues aus Routingtabelle |
@@ -275,7 +276,7 @@ Broker-Zugangsdaten und HMAC-Shared-Secret sind getrennte Einstellungen.
 
 Attribute enthalten höchstens lokale Beispiel-DSNs oder Verbindungsnamen,
 keine produktiven Secrets. Für produktive Deployment-Konfiguration ist die
-programmatische Konstruktor-/Factory-Konfiguration vorzuziehen. [geändert]
+programmatische Konstruktor-/Factory-Konfiguration vorzuziehen.
 
 ## § 5 Senden, empfangen und Worker-Lebenszyklus
 
@@ -286,8 +287,8 @@ Die vorgeschlagenen öffentlichen Signaturen lauten:
 publish(string $topic, string $type, array|object $payload,
     ?PublishOptions $options = null): PublishReceipt;
 emit(object $message, ?PublishOptions $options = null): PublishReceipt;
-subscribe(string $topic, string $subscription, callable $handler,
-    ?SubscriptionOptions $options = null): SubscriptionHandle;
+subscribe(string|callable $topic, ?string $subscription = null,
+    ?callable $handler = null, ?SubscriptionOptions $options = null): SubscriptionHandle;
 request(string $topic, string $type, array|object $params,
     ?RequestOptions $options = null): PendingReply;
 respond(string $topic, string $subscription, callable $handler,
@@ -300,15 +301,17 @@ close(): void;
 
 `publish` benennt Topic und Typ ausdrücklich; `emit` liest sie aus Registry
 oder Attribut der lokalen Sendeklasse. Ein fehlendes oder widersprüchliches
-Mapping wirft `MessageMappingException`. Explizites Mapping hat Vorrang vor
-Attributen; mehrfache programmatische Registrierung desselben Sendetyps wird
-abgelehnt. `PublishOptions` kann eine stabile `messageId`, `expiresAt`,
+Mapping wirft `MessageMappingException`. Registry, Attribute und explizite
+Angaben ergänzen nur offene Werte; widersprüchliche feste Angaben werden
+abgelehnt statt still überschrieben. Mehrfache programmatische Registrierung
+desselben Sendetyps wird abgelehnt. `PublishOptions` kann eine stabile `messageId`, `expiresAt`,
 `correlationId`, getrennte `metadata` und Attachments tragen. Ein Retry eines
 unklar bestätigten Publishes verwendet dieselbe ID und denselben fachlichen
 Inhalt. `request`/`respond` sind die optionale RPC-Erweiterung aus § 13;
-`subscribe` sendet niemals automatisch einen Rückgabewert.
+`subscribe` sendet niemals automatisch einen Rückgabewert. [geändert]
 
-`SubscriptionOptions` enthält optional `type` als exakten Filter,
+`SubscriptionOptions` enthält optional `topic` und `subscription` für die
+Callback-Kurzform sowie `type` als exakten Filter,
 `payloadClass` als lokale Zielklasse, `startAt`, `ackMode`, `retryPolicy` und
 `durability` (Default `Durability::Durable`). Memory/Unix-Tests wählen explizit
 `Durability::Volatile`; damit wird keine Haltbarkeit über Prozessneustarts
@@ -317,7 +320,19 @@ Ohne Typfilter muss der Array-Handler alle
 Nachrichtentypen des Topics verarbeiten können. Nicht passende Typen werden
 für diese Subscription bewusst übersprungen und bestätigt; ein separater
 Handler darf nicht dieselbe Subscription mit anderem Filter übernehmen.
-Filteränderungen benötigen eine neue Subscription oder explizite Migration.
+Filteränderungen benötigen eine neue Subscription oder explizite Migration. [geändert]
+
+Die bisherigen Aufrufe `subscribe($topic, $subscription, $handler, $options)`
+bleiben gültig. Neu ist `subscribe($callback)` bzw.
+`subscribe($callback, options: new SubscriptionOptions(...))`. Der erste
+Parameter heißt zur Kompatibilität weiter `topic`; ist `handler` gesetzt,
+muss `topic` ein String sein (explizite Form). Ohne `handler` muss er ein
+aufrufbarer Callback sein (Kurzform). Ein String ohne Handler wird nur als
+existierender Funktionsname akzeptiert, niemals als automatisch entdeckter
+Topic-Handler. Eine Subscription in der zweiten Position ergänzt bei der
+Kurzform einen offenen Wert. Vermischte ungültige Aufrufe werden mit
+`InvalidHandlerException` abgelehnt. Ein wirklich leeres `subscribe()` besitzt
+keinen Callback und ist kein gültiger Aufruf. [neu]
 
 `subscribe` registriert und bindet, `run` startet den blockierenden Empfang.
 Vorgesehen: `RunOptions(maxMessages, maxSeconds, idleTimeoutSeconds)`;
@@ -348,11 +363,13 @@ geworfen statt in einer Endlosschleife verborgen.
 
 [Attributbeispiele: 03-attributes.php](../../examples/api-draft/03-attributes.php).
 Mit „Annotationen“ sind zunächst native PHP-8-Attribute gemeint:
-`#[MessageType('user.created.v1', topic: 'users')]` auf DTOs und
-`#[Subscribe(topic: 'users', subscription: 'billing-users',
-type: 'user.created.v1')]` auf öffentlichen Methoden. PHPDoc-Annotationen als
+`#[MessageType('user.created.v1', topic: 'users', subscription: 'sdk-users')]`
+auf DTOs ermöglicht `subscribe($callback)` mit einem typisierten ersten
+Parameter. Alternativ reicht `#[Subscribe]` auf einer öffentlichen
+Handler-Methode; `registerHandlers($object)` verwendet denselben Resolver.
+Offene Werte werden am Handler oder Aufruf ergänzt. PHPDoc-Annotationen als
 zweites Metadatensystem sind vorerst nicht vorgesehen; die normalen
-PHPDoc-Feldtypen von `phore/schema` bleiben nutzbar.
+PHPDoc-Feldtypen von `phore/schema` bleiben nutzbar. [geändert]
 
 Ein SDK enthält ausschließlich Contracts/DTOs und optionale Attribute, keine
 Connection, Secrets oder Worker. Ein SDK darf auch ganz ohne MQ-Attribute
@@ -376,6 +393,7 @@ Typisierte Handler benötigen einen eindeutigen Message-Typ aus
 ist die Registrierung ungültig. Die optionale Schema-Bridge muss verfügbar
 sein, sobald DTO-Hydration oder Contract-Validierung verlangt wird;
 sonst `MissingDependencyException`, niemals stiller Rückfall auf Arrays.
+Der Resolver aus § 6.2 prüft alle vorhandenen Angaben auf Übereinstimmung. [geändert]
 
 Kompatibilität bedeutet: Pflichtfelder müssen vorhanden sein, die vorhandenen
 bekannten Felder müssen rekursiv ihren Datentypen entsprechen. Zusätzliche
@@ -413,6 +431,106 @@ Validator in `phore/schema` wäre eine gesonderte spätere Aufgabe. Klassen-
 Identitätsprüfungen für Wire-Payloads sowie `unserialize()` sind ausgeschlossen.
 JSON unterstützt nur definierte Datentypen; Ressourcen, Closures, Zyklen,
 NaN/Infinity und unbekannte Objekttypen werfen `SerializationException`.
+
+### § 6.2 Metadaten einmal definieren und aus dem Callback ableiten
+
+```php
+#[MessageType('user.created.v1', topic: 'users', subscription: 'sdk-users')]
+final class UserCreated { public string $userId; }
+
+$mq->subscribe(function (UserCreated $event): void {
+    // Topic users, Subscription sdk-users, Typ user.created.v1;
+    // Payload wird vor dem Callback strukturell geprüft und hydriert.
+});
+```
+
+`MessageType(string $type, ?string $topic = null, ?string $subscription = null)`
+bezeichnet einen stabilen Wire-Typ und optional feste Routingwerte.
+`Subscribe(?string $topic = null, ?string $subscription = null, ?string $type = null)`
+kann ohne Argumente auf einer Methode stehen. Reflection untersucht den ersten
+Payload-Parameter des Callbacks; der optionale zweite `MessageContext` liefert
+keine Routingwerte. Closures, Funktionsnamen, öffentliche Methoden-Callables
+und aufrufbare Objekte werden einheitlich über ihre tatsächliche Signatur
+aufgelöst, ohne den Callback auszuführen. Mehrdeutige Payload-Typen bleiben
+wie in § 6 beschrieben ungültig. [neu]
+
+Der Resolver sammelt Klassenmapping/`MessageType`, ein gegebenenfalls am
+Callback vorhandenes `Subscribe`-Attribut und explizite Aufruf-/Optionswerte.
+Für Topic, Subscription, Typ und Zielklasse gilt: fehlend lässt sich ergänzen;
+mehrere identische Angaben sind zulässig; unterschiedliche feste Angaben
+sind ein Fehler. Es gibt keinen stillen Vorrang. Methodennamen, PHP-FQCNs,
+Hostname oder Instanz-ID werden niemals zu Topic- oder Subscriptionnamen
+umgedeutet. Für SDKs ohne Attribute kann
+`registry->register($type, $class, topic: ..., subscription: ...)` dieselben
+Metadaten lokal hinterlegen. [neu]
+
+Topic und Subscription müssen nach Auflösung eindeutig vorhanden sein;
+für einen DTO-Handler zusätzlich der Wire-Typ. Untypisierte/Array-Handler
+benötigen explizite Topic-/Subscription-Angaben und optional den Typfilter.
+Ohne Typfilter bleibt ihr bisheriger Empfang aller Typen des Topics gültig.
+`payloadClass` muss weiterhin zum Callback passen. Ohne Schema-Bridge gibt
+es auch in der Kurzform keine automatische DTO-Hydration. [neu]
+
+Ein für mehrere Topics verwendeter Contract lässt `MessageType::topic`
+vollständig weg. Das Topic wird für jede Registrierung explizit gewählt;
+es gibt keine automatische Expansion, kein Wildcard-Abonnement und keine
+Liste im `topic`-Feld. Für unabhängige Gruppen bleibt entsprechend
+`MessageType::subscription` offen. Der fachliche Typ wird weiterhin aus der
+Klasse übernommen: [neu]
+
+```php
+#[MessageType('audit.entry.v1')]
+final class AuditEntry { public string $text; }
+
+$handler = function (AuditEntry $event): void { /* ... */ };
+$mq->subscribe($handler, options: new SubscriptionOptions(
+    topic: 'audit.users', subscription: 'audit-reader',
+));
+$mq->subscribe($handler, options: new SubscriptionOptions(
+    topic: 'audit.billing', subscription: 'audit-reader',
+));
+```
+
+Die Subscription ist die Gruppe für konkurrierende Worker, kein intrinsischer
+Bestandteil der Nachricht auf dem Wire. Eine im SDK festgelegte Subscription
+wird daher nur gewählt, wenn diese Gruppierung absichtlich für alle Nutzer
+gelten soll. Mehrere Dienste, die dieselben vollständigen Metadaten übernehmen,
+konkurrieren um Arbeit; für Fan-out braucht jeder seine eigene, am Contract
+offen gelassene Subscription. Ein gleicher Gruppenname an unterschiedlichen
+logischen Topics bezeichnet unterschiedliche Bindungen. [neu]
+
+`emit($dto)` verwendet dieselben festen Topic-/Typ-Angaben; die Subscription
+spielt beim Senden keine Rolle. Ohne festes Topic sendet die Anwendung mit
+`publish($topic, $type, $dto)` bzw. einem Array. Bei einem gemappten DTO müssen
+explizite Topic-/Typ-Werte zu dessen festen Metadaten passen; ein offenes
+Topic lässt sich frei ergänzen. `emit` ohne auflösbares Topic wirft
+`MessageMappingException`. Mehrere Topics werden durch mehrere ausdrückliche
+Publishes angesprochen, nicht durch einen verborgenen Broadcast. [neu]
+
+Die Registrierung prüft alle Metadaten vor dem Anlegen/Binden von Ressourcen.
+Widersprüche werfen `MessageMappingException` mit `code=MAPPING_CONFLICT`,
+`field`, `sources` und den betroffenen nicht geheimen Mappingwerten; fehlende
+Pflichtwerte `MAPPING_INCOMPLETE` mit `missingFields`. Ein zweiter lokaler
+Handler für dieselbe Topic-/Subscription-Bindung wirft
+`InvalidHandlerException` mit `code=DUPLICATE_SUBSCRIPTION`, auch wenn beide
+Callbacks gleich aussehen oder verschiedene Typfilter wünschen. Andere
+Prozesse derselben Gruppe sind ausdrücklich erlaubt. [neu]
+
+`registerHandlers` prüft sämtliche ausgewählten Methoden zunächst gemeinsam
+auf lokale Konflikte und bindet danach. Kein globales Dateisystem-Scanning;
+eine bereits einzeln registrierte Methode darf nicht durch anschließendes
+`registerHandlers` doppelt gebunden werden. Schlägt das tatsächliche Binden
+am Broker teilweise fehl, werden die in diesem Aufruf neu geöffneten lokalen
+Bindings geschlossen; zuvor bestehende Registrierungen bleiben erhalten.
+Dabei bereits angelegte dauerhafte Brokerressourcen werden nicht automatisch
+gelöscht. Die Meldung benennt die betroffenen Bindings. [neu]
+
+Vorgesehene Contract-Tests: identisches Routing aller drei Registrierungswege,
+DTO-Hydration, offene Topics, feste Topic-/Typ-/Subscription-Konflikte, fehlende
+Metadaten, doppelte lokale Gruppen, gemeinsame Gruppe in zwei Prozessen,
+keine Ressourcenerzeugung bei Metadatenfehlern und Cleanup bei Bindefehlern.
+Beispiel 03 zeigt die erfolgreichen Varianten und erwartete Exceptions;
+es bleibt ausschließlich API-Entwurf. [neu]
 
 ## § 7 Redis-Standard und Konnektorvergleich
 
@@ -582,7 +700,7 @@ Payload, Secret, signierter Download-Link oder Receipt im normalen Fehlertext.
 | `UnsupportedCapabilityException` | Dauerhafter Fan-out mit reinem SQS oder Replay ohne Unterstützung |
 | `ConnectionException` / `AuthenticationException` | Netzwerkproblem retrybar; falsche Credentials nicht endlos wiederholen |
 | `PublishException` | Annahme fehlgeschlagen oder unbekannt; `outcome` = rejected/unknown |
-| `MessageMappingException` / `InvalidHandlerException` | Fehlender Typname, Konflikt oder mehrdeutige Reflection |
+| `MessageMappingException` / `InvalidHandlerException` | `MAPPING_INCOMPLETE`, `MAPPING_CONFLICT`, `DUPLICATE_SUBSCRIPTION` oder mehrdeutige Reflection; Details in § 6.2 [geändert] |
 | `SerializationException` / `InvalidEnvelopeException` | Nicht unterstützte Payload oder defekter Frame; endgültig |
 | `MessageValidationException` | `user.created.v1: $.email: required property is missing` |
 | `MessageHydrationException` | Konstruktor-/Property-Zuweisung gescheitert; Schema-Exception als previous |
