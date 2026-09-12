@@ -13,6 +13,7 @@
 | 2026-09-12 | dermatthes | §§ 4, 4.1, 7, 8, 10, 11.1, 13.1, 13.2, 13.4, 13.5: Kurze lokale file-Beispiele, zentrale Verbindungsvorgaben, Callback-Fehler und typisierte RPC-Exceptions ergänzt |
 | 2026-09-12 | dermatthes | §§ 1–5, 7–16: RabbitMQ als einzige Umsetzung beschlossen; Interface ohne Austauschlogik, neutrale Konfiguration, Docker-Setup und Beispiele vereinheitlicht |
 | 2026-09-12 | dermatthes | §§ 1, 10: PHP 8.5 als Mindestversion und ausschließlich PHP-Beispiele/Setup festgelegt |
+| 2026-09-12 | dermatthes | §§ 2, 7, 11: Listener provisionieren; Publisher werfen bei fehlender Topologie QueueConfigurationMissingException |
 
 ## § 1 Abstract und Lieferumfang
 
@@ -25,11 +26,11 @@ RPC, Fehlerantworten, Metadaten, Middleware und Systemcheck bleiben Bestandteil
 des Entwurfs. Signierung und Dateireferenzen behalten ihre fachlichen Verträge.
 
 **Die PHP-API ist noch nicht implementiert.** Composer-Metadaten und Autoloading
-stammen aus der Vorlage; die PHP-Mindestversion ist verbindlich >=8.5. [geändert]
+stammen aus der Vorlage; die PHP-Mindestversion ist verbindlich >=8.5.
 Der Docker-Start und das PHP-Setup aus [Setup](../setup.md) sind davon
 unabhängige Entwicklungsdateien; sie implementieren keine MQ-Library. Alle
 ausführbaren Beispiele und Setup-Skripte dieses Projekts sind in PHP >=8.5
-zu schreiben; verbindliche Projektregeln stehen in [AGENTS.md](../../AGENTS.md). [geändert]
+zu schreiben; verbindliche Projektregeln stehen in [AGENTS.md](../../AGENTS.md).
 
 | Umfang | Entscheidung |
 |---|---|
@@ -120,7 +121,7 @@ Eine neu angelegte Subscription empfängt erst Nachrichten ab Erstellung ihrer
 Bindung. Ein bestehender Rückstand bleibt bei Worker-Neustarts erhalten.
 Es gibt weder Start-Cursor noch Replay-Option. In Produktion werden fachliche
 Topics und Subscriptions vorab eingerichtet. `autoCreate: true` erlaubt
-explizit ihre dynamische Anlage; `cancel()` beendet nur den lokalen Consumer,
+explizit ihre dynamische Anlage beim Registrieren von Listenern; `cancel()` beendet nur den lokalen Consumer,
 löscht aber weder Subscription noch Rückstand.
 
 ## § 3 Abstraktionsschichten und Erweiterungspunkte
@@ -568,10 +569,36 @@ Doppelpunkte in physischen Namen sind dadurch eindeutige Trenner. Reservierte
 interne Namen beginnen mit `_phore`; Anwendungstopologien verwenden sie nicht.
 
 `publish` verwendet persistente Frames, Publisher Confirms und `mandatory`.
-Eine nicht routbare Nachricht wirft `UnroutableMessageException`; eine positive
+Eine nicht routbare fachliche Nachricht wirft `QueueConfigurationMissingException`; eine positive
 Publish-Bestätigung beweist keine Handler-Bereitschaft und nicht die Existenz
 aller fachlich erwarteten Subscriptions. Fachliche Bindungen müssen vor Publish
 existieren. Eine Exchange selbst speichert keinen Backlog.
+
+`publish` und `request` legen niemals fachliche Topics, Queues oder Bindings
+an, auch nicht bei `autoCreate: true`. Die Anlage gehört dem Listener beim
+Registrieren mit `subscribe`/`respond` oder dem expliziten Setup. Der Publisher
+meldet ein nachweislich fehlendes Topic oder eine nicht routbare Nachricht mit
+`QueueConfigurationMissingException extends InvalidConfigurationException`.
+Diese besitzt `reason`, `topic` und `messageType`; erlaubte Gründe sind
+`TOPIC_MISSING` und `NO_MATCHING_SUBSCRIPTION`. Beispielmeldung:
+„Für Topic users und Typ user.created.v1 fehlt die Queue-Konfiguration.
+Möglicherweise wurde der zuständige Listener-Dienst noch nicht initialisiert.“
+Keine Credentials oder Payloads in dieser Diagnose. [neu]
+
+Der Fehler entsteht direkt bei `publish`/`request`, nicht erst bei `await`.
+Eine Vorabprüfung ersetzt weder `mandatory` noch Publisher Confirms: Wird die
+Topologie zwischen Prüfung und Versand entfernt, wird auch die Brokerantwort
+in denselben Fehlervertrag übersetzt. Rechtefehler, Verbindungsabbrüche und
+unklare Publish-Bestätigungen behalten ihre eigenen Exceptions; sie beweisen
+keine fehlende Konfiguration und erlauben keinen blinden automatischen Retry.
+Die internen, ausdrücklich aktivierten RPC-Rückkanäle aus § 13.1 bleiben davon
+getrennt; sie erzeugen keine fachliche Empfänger-Subscription. [neu]
+
+Eine vorhandene passende dauerhafte Subscription ohne aktiven Worker ist
+weiterhin ein gültiges Versandziel und sammelt Backlog. Die Exception sagt
+nichts Sicheres über einen fehlenden Container aus. Für aktuelle Listener-
+Bereitschaft und alle erwarteten Empfänger dient `check()`; ein routbares
+Publish allein beweist nur mindestens ein passendes Ziel. [neu]
 
 `subscribe` validiert/anlegt Exchange, Queue und Binding gemäß `autoCreate`.
 Identische Definitionen sind wiederholbar. Abweichende Typfilter, Queue-Eigenschaften
@@ -698,7 +725,7 @@ Konfigurationsdatei in RabbitMQ-Deklarationen über dessen HTTP-Management-API.
 Es benötigt PHP >=8.5 CLI mit `allow_url_fopen=1`, keine installierte PhoreMQ-Library. `--dry-run` prüft und zeigt die
 Operationen ohne Verbindung. Das Skript legt nichts durch Publish an und führt
 keine Handler aus. Es löscht keine Ressourcen; entfernte Konfigurationseinträge
-entfernen daher keine existierenden Queues. Migrationen sind explizite Vorgänge. [geändert]
+entfernen daher keine existierenden Queues. Migrationen sind explizite Vorgänge.
 
 ## § 11 Exceptions und Diagnose
 
@@ -714,7 +741,7 @@ Payload, Secret, signierter Download-Link oder Receipt im normalen Fehlertext.
 | `InvalidDsnException` | Ungültiger Port oder unbekannte Option; Konfiguration korrigieren |
 | `MissingDependencyException` | RabbitMQ-Client oder benötigte Schema-Bridge fehlt; vor Workerstart abbrechen |
 | `TopologyConflictException` / `TopologyVerificationException` | Deklaration widerspricht bestehender Topologie oder kann nicht vollständig geprüft werden |
-| `UnroutableMessageException` | Keine passende Subscription für die veröffentlichte Nachricht |
+| `QueueConfigurationMissingException` | Fachliches Topic fehlt oder keine passende Subscription; Grund `TOPIC_MISSING` oder `NO_MATCHING_SUBSCRIPTION` |
 | `ConnectionException` / `AuthenticationException` | Netzwerkproblem retrybar; falsche Credentials nicht endlos wiederholen |
 | `PublishException` | Annahme fehlgeschlagen oder unbekannt; `outcome` = rejected/unknown |
 | `ReplyNotEnabledException` | await auf ohne Rückkanal gesendeter Nachricht; kein nachträgliches Senden |

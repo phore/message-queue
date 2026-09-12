@@ -11,6 +11,7 @@ use function Examples\MessageQueue\demoConnection;
 use Phore\MessageQueue\PhoreMQ;
 use Phore\MessageQueue\ConnectionOptions;
 use Phore\MessageQueue\Exception\MessageValidationException;
+use Phore\MessageQueue\Exception\QueueConfigurationMissingException;
 use Phore\MessageQueue\MessageContext;
 use Phore\MessageQueue\MessageRegistry;
 use Phore\MessageQueue\SubscriptionOptions;
@@ -99,6 +100,28 @@ function demo(): void
             // Erwartet: user.created.v1: $.email: required property is missing
             printf("Ungültige Nachricht: %s\n", $exception->getMessage());
         }
+    } finally {
+        $mq->close();
+    }
+}
+
+// Separates Sender-Beispiel nach Implementierung; der Publisher provisioniert nichts.
+// Fehlt users oder die passende Bindung, kann die Anwendung den Zustand anzeigen.
+function publishFromFrontend(): void
+{
+    $mq = new PhoreMQ(...demoConnection());
+    try {
+        $mq->publish('users', 'user.created.v1', [
+            'userId' => 'u-789',
+            'email' => 'user@example.org',
+        ]);
+    } catch (QueueConfigurationMissingException $error) {
+        // reason: TOPIC_MISSING oder NO_MATCHING_SUBSCRIPTION.
+        printf("Queue-Konfiguration fehlt für %s / %s (%s).\n",
+            $error->topic, $error->messageType, $error->reason);
+        echo "Möglicherweise wurde der zuständige Listener-Dienst noch nicht initialisiert.\n";
+        // Kein automatisches Neuanlegen oder erneutes Senden.
+        // Eine vorhandene Queue ohne aktiven Worker löst diesen Fehler nicht aus.
     } finally {
         $mq->close();
     }

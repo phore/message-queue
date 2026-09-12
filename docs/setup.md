@@ -90,7 +90,7 @@ Ein Client in einem anderen Container desselben Compose-Netzes verwendet
 | `topics` | Logische Kanäle, die das Setup vorher einrichtet |
 | `subscriptions[].name` | Dauerhafter Gruppenname; mehrere Prozesse mit diesem Namen teilen Arbeit |
 | `subscriptions[].type` | Ein exakter Nachrichtentyp; `null` empfängt alle Typen des Topics |
-| `autoCreate` | Erlaubt der geplanten Library die dynamische Anlage fachlicher Ressourcen; Standard false, Demo true |
+| `autoCreate` | Erlaubt die dynamische Anlage beim Registrieren von Listenern; Publisher legen nichts an; Standard false, Demo true |
 | `managementUrl` | Expliziter Verwaltungsendpunkt für die vollständige Topologieprüfung; im Betrieb HTTPS und begrenzte Rechte |
 | `maxInFlight` | Maximale Anzahl unbestätigter Zustellungen pro Consumer; kein zusätzlicher PHP-Thread |
 | `security.mode` | In dieser isolierten Demo explizit `unsigned`; produktiv eine passende HMAC-Policy konfigurieren |
@@ -200,3 +200,18 @@ PhoreMQ-Systemcheck vorgesehen. Die PHP-Beispiele brauchen später eine
 Implementierung und einen laufenden Worker. Reine JSON-Nachrichten, die man
 im Management-UI testweise veröffentlicht, sind noch keine gültigen signierten
 PhoreMQ-Envelopes. [RabbitMQ Management](https://www.rabbitmq.com/docs/management)
+
+## Publisher melden fehlende Initialisierung
+
+Die automatische Anlage liegt beim Listener (`subscribe`/`respond`) oder beim
+expliziten Setup. `publish` und `request` legen auch mit `autoCreate: true` keine
+fachlichen Ressourcen an. Ein fehlendes Topic oder keine passende Subscription
+führt direkt zu `QueueConfigurationMissingException` mit `reason`, `topic`
+und `messageType`. Die Gründe sind `TOPIC_MISSING` und `NO_MATCHING_SUBSCRIPTION`.
+Ein Beispiel zum Abfangen steht in [02-programmatic.php](../examples/api-draft/02-programmatic.php).
+
+Die Oberfläche kann daraufhin anzeigen: „Die Nachrichtenverarbeitung ist noch
+nicht eingerichtet. Möglicherweise fehlt die Initialisierung des zuständigen
+Dienstes.“ Ein vorhandenes Queue-Ziel ohne laufenden Worker nimmt dagegen
+weiterhin Nachrichten an; aktuelle Dienstbereitschaft wird mit `check()` geprüft.
+Berechtigungsfehler und Verbindungsprobleme bleiben gesonderte Fehler.
